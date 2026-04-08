@@ -6,40 +6,60 @@ Nestify V2 now runs as an always-on agentic platform. The 7 specialized agents a
 
 ## Latest Product Updates (April 2026)
 
-- Autonomous deployment is now the default primary action: Full Autonomous Deployment (Self-Healing Enabled).
-- Analysis and Deployment pages now use a premium state/transition system with animated lifecycle states, structured AI timeline, and confidence-aware decision cards.
-- Agent output language is now contextual by default: reasoning, detected patterns, and confidence phrasing are included in streamed progress messages.
-- Layered Analysis UX was refined for intentional flow: AI execution first, expandable deep technical detail second, result choreography third.
-- Empty/loading states are now intelligent and non-abrupt; timeline and result blocks avoid dead zones and unclear placeholders.
-- Deployment fallback behavior is now explicit in UI: local preview mode is labeled clearly and separated from public platform success.
-- Chosen platform display now prioritizes agent/deployment state; optimization output is shown as cheapest recommendation, not forced as chosen provider.
-- Deployment API now normalizes provider to local when local fallback mode is active to avoid stale provider labels.
-- Cost display is INR-first with live USD/INR conversion, refresh timestamp, and fallback handling.
-- ZIP-only backend deploy automation now attempts temporary private GitHub repo publishing when github_url is missing.
-- Temporary GitHub publishing now handles existing files by retrying with content sha and supports non-main default branches.
-- Meta-agent retry flow now stops early on fatal blockers or exhausted retry modifications instead of looping noisy retries.
-- Railway workspace-aware automation is now supported; set RAILWAY_WORKSPACE_ID when Railway account/project policy requires workspace-scoped project creation.
-- Deployment recovery timeline shows attempt-by-attempt status with applied fixes and failure reasons.
-- Manual remediation loop supports resubmission via updated GitHub URL or updated ZIP and restarts full pipeline.
+- Decision-driven orchestration is now the primary execution model: actions are selected from current state, not a fixed linear phase chain.
+- Analyze and Deploy paths are explicitly separated.
+  - Analyze path is read-only and does not auto-deploy.
+  - Autonomous Fix and Deploy path performs remediation with simulation-gated retries.
+- Meta-agent loop now classifies failures (`missing_env`, `build_error`, `dependency_issue`, `infra_issue`, `unknown`) and adapts strategy per class.
+- Retry policy is bounded and anti-repeat:
+  - provider attempt caps,
+  - duplicate-fix suppression,
+  - strategy switching when repeated failures are detected.
+- Deployment flow now favors high-signal operator feedback:
+  - compressed decision-action-outcome feed,
+  - duplicate/retry collapse,
+  - reasoning-noise suppression in primary UI.
+- Deployment fallback behavior is explicit:
+  - cloud deploy attempts remain primary,
+  - local preview fallback is clearly labeled when used.
+- ZIP-only backend deploy automation can publish to a temporary private GitHub repository when `github_url` is not provided.
+- Temporary GitHub publishing supports non-main default branches and existing-file SHA updates.
+- Railway workspace-aware automation is supported via `RAILWAY_WORKSPACE_ID` when required by account policy.
+- Manual remediation loop remains available: users can resubmit updated ZIP or GitHub URL and restart the full decision cycle.
 
 ## Current Workflow
 
 1. Upload source (ZIP or GitHub URL).
-2. Run agentic analysis (stack detection, security, fixes, cost, provider strategy).
-3. Review synchronized findings, fix plan, and INR cost matrix.
-4. Choose one of two paths:
-  - Full autonomous self-healing deployment.
-  - Manual remediation, then resubmit updated source.
-5. Deployment executes with bounded retry and remediation steps.
-6. Post-deploy monitoring and learning signals are recorded for future runs.
+2. Run analysis path:
+  - stack and architecture profiling,
+  - security/risk enrichment,
+  - deployment intent and cost reasoning,
+  - status/report generation for operator review.
+3. Choose execution path:
+  - Autonomous Fix and Deploy, or
+  - Manual remediation and resubmission.
+4. Autonomous path executes:
+  - deploy attempt,
+  - failure classification,
+  - targeted remediation,
+  - simulation validation gate,
+  - bounded redeploy,
+  - provider switch when strategy/provider cap requires.
+5. If cloud deployment remains blocked, fallback messaging is explicit and local preview mode is reported as fallback.
+6. Outcomes, fixes, provider attempts, and decision trace are persisted for explainability and learning.
 
 ## Architecture Snapshot
 
-- Frontend (React/Vite): Upload, Analysis, Deployment, Monitor journey with live polling and WebSocket feed.
-- API layer (FastAPI): Project/report/status endpoints, optimization endpoints, deployment controls.
-- Agentic orchestration: 7 specialized agents for analysis, security intelligence, cost optimization, platform strategy, self-healing, monitoring, and learning.
-- Data layer: Project state, findings, fix logs, deployment records, and historical outcomes.
-- Cost engine: provider comparison matrix, cheapest-provider selection, INR conversion via live FX with cached fallback.
+- Frontend (React + Vite + TypeScript + Framer Motion): Upload, Analysis, and Deployment views with compressed real-time execution feed.
+- Realtime transport: WebSocket progress stream with polling fallback for status/report snapshots.
+- Backend (FastAPI): project-centric endpoints for upload, status, reports, audit/PDF export, and autonomous deployment actions.
+- Orchestration core: centralized decision engine in `app/core/execution_engine.py` with cycle-aware state memory and action policy.
+- Agent layer: specialized roles for code intelligence, security, remediation, simulation validation, deployment execution, and learning curation.
+- State contracts: failure classes, provider attempts, fixes applied, simulation validation status, and decision log are captured for traceability.
+- Storage: SQLite by default for project state, findings, remediation events, and deployment outcomes.
+- Delivery strategy: cloud-first deployment with bounded retries and explicit local fallback reporting.
+
+For a full implementation-level breakdown, see `README_ARCHITECTURE.md`.
 
 ## 🤖 Agentic Intelligence Layer (New in V2)
 
