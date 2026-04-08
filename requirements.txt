@@ -1,0 +1,35 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+httpx==0.27.0
+python-dotenv==1.0.0
+websockets==12.0
+pydantic>=2.0.0
+
+# V2: Graph Intelligence
+neo4j>=5.15.0
+networkx>=3.2
+
+# V2: Vector Embeddings
+qdrant-client>=1.7.0
+
+# V2: Database
+asyncpg>=0.29.0
+
+# V2: Code Analysis
+flake8>=7.0.0
+
+# V2: Embeddings Fallback + Math
+numpy>=1.26.0
+scikit-learn>=1.4.0
+
+# Agentic Extension
+crewai>=0.28.0
+crewai-tools==0.1.6
+anthropic==0.21.0
+docker>=7.1.0
+locust>=2.31.0
+prometheus-client>=0.21.0
+psutil>=6.0.0
+reportlab>=4.2.0
+Pillow>=10.1.0

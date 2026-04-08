@@ -1,0 +1,65 @@
+# ═══ Nestify V1 — .gitignore ═══
+
+# Environment
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite3
+*.sqlite
+
+# Build artifacts
+coverage/
+.nyc_output/
+
+# Runtime/generated project data
+app/project_sources/
+app/outputs/
+frontend/dist/
+frontend/node_modules/
+
+# Resolved plan files
+*.resolved
+*.resolved.*
