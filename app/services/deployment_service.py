@@ -1027,7 +1027,8 @@ async def execute_deployment(
         )
         update_project(project_id, {
             "deployment": blocker,
-            "status": "blocked",
+            # projects.status CHECK does not allow "blocked".
+            "status": "failed",
         })
         try:
             _record_learning(
@@ -1078,7 +1079,8 @@ async def execute_deployment(
             result["details"]["note"] = "Preview URL is available for local validation, but public deployment was not attempted."
             update_project(project_id, {
                 "deployment": result,
-                "status": "blocked",
+                # Persist schema-supported status while blocked semantics stay in payload.
+                "status": "failed",
             })
             try:
                 _record_learning(
@@ -1154,7 +1156,8 @@ async def execute_deployment(
                 )
                 update_project(project_id, {
                     "deployment": result,
-                    "status": "blocked",
+                    # Persist schema-supported status while blocked semantics stay in payload.
+                    "status": "failed",
                 })
                 try:
                     _record_learning(
@@ -1190,7 +1193,8 @@ async def execute_deployment(
     update_project(project_id, {
         "deployment": result,
         "public_url": result.get("deployment_url"),
-        "status": "live" if result.get("deployment_url") else ("blocked" if result.get("status") == "blocked" else "failed"),
+        # projects.status CHECK does not allow "blocked".
+        "status": "live" if result.get("deployment_url") else "failed",
     })
 
     details = result.get("details") if isinstance(result.get("details"), dict) else {}

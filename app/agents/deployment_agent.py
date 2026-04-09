@@ -260,13 +260,18 @@ class DeploymentAgent:
                 env_template=env_template,
             )
 
+            raw_status = str(result.get("status") or "success").strip().lower()
+            deployment_url = result.get("deployment_url")
+            # deployments.status CHECK only allows: pending, deploying, success, failed
+            db_status = "success" if raw_status in {"success", "deployed", "live"} and deployment_url else "failed"
+
             update_deployment(deploy_id, {
-                "status": result.get("status", "success"),
-                "deployment_url": result.get("deployment_url"),
+                "status": db_status,
+                "deployment_url": deployment_url,
                 "details": result.get("details", {}),
             })
 
-            result_status = str(result.get("status") or "unknown").lower()
+            result_status = raw_status
             if result_status == "success" and result.get("deployment_url"):
                 add_log(
                     self.project_id,
