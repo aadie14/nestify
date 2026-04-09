@@ -1,329 +1,288 @@
-# Nestify - Architecture, Pipeline, and Feature Reference
+# Nestify - Updated Architecture, Agent Graph, and Feature Reference
 
 Last updated: April 2026
 
-Nestify is an autonomous, decision-driven DevSecOps platform that analyzes source code, reasons over risk and deployment constraints, applies bounded remediation, validates fixes, and executes cloud deployment with high-signal operator visibility.
+Nestify is an agentic DevSecOps orchestration platform that performs source analysis, risk reasoning, bounded remediation, and cloud deployment with operator-visible decision traces.
 
-This README is the primary current-state document for architecture, agent graph, pipeline, and feature coverage.
+This README is the canonical current-state product and architecture document.
 
-## 1) Product Definition
+## 1) System Goal
 
-Nestify is an orchestration system, not a static deployment script.
+Nestify is built to solve four practical problems:
 
-Core behavior:
+- opaque deployment failures,
+- noisy low-signal logs,
+- repeated manual remediation loops,
+- weak traceability of autonomous decisions.
 
-- ingest source code,
-- build architecture and dependency understanding,
-- enrich security and risk context,
-- choose actions from runtime state,
-- apply controlled fixes,
-- validate through simulation,
-- deploy with bounded adaptive retries,
-- persist outcomes for explainability and learning.
+It does this through a deterministic execution engine with adaptive policy decisions and strict stop conditions.
 
-## 2) Core Design Principles
+## 2) Current LLM Policy (Updated)
 
-- Decision over linear sequencing: next action is selected from current state.
-- Safety over speed: simulation gate protects redeploy actions.
-- Signal over noise: UI prioritizes decision, action, outcome.
-- Bounded autonomy: retry caps and anti-repeat logic prevent loops.
-- Explainability by default: decision and execution traces are persisted.
+Active path used by the platform is Groq + Gemini fallback routing in `app/services/llm_service.py`.
 
-## 3) Current System Architecture
+- Primary active providers:
+  - Groq (`llama-3.1-8b-instant`, `llama-3.3-70b-versatile`)
+  - Gemini (`gemini-2.0-flash`, `gemini-2.5-flash`)
+- Controls:
+  - per-model cooldown,
+  - per-day token/request budgets,
+  - automatic model fallback,
+  - runtime disable for unavailable models.
+
+Anthropic Sonnet is not part of the active runtime policy for this deployment baseline.
+
+## 3) Updated Architecture Structure
 
 ### 3.1 Frontend
 
-- Stack: React, Vite, TypeScript, Framer Motion.
-- Primary pages:
+- Stack: React + Vite + TypeScript + Framer Motion
+- Primary views:
   - Upload
   - Analysis
-  - Deployment
-- Realtime model:
-  - WebSocket execution events
-  - polling fallback for status/report consistency
-- UX model:
-  - compressed execution feed,
-  - summary-first deployment experience,
-  - explicit fallback messaging.
+  - Deploy
+  - Monitor
+- Runtime behavior:
+  - polling-first status synchronization,
+  - structured one-line feed rendering,
+  - progress and step-state UX contracts.
 
 ### 3.2 Backend
 
-- Stack: FastAPI.
-- Orchestration core: app/core/execution_engine.py.
-- API grouping: project-centric routes under /api/v1/projects/*.
-- Persistence: SQLite default for project, remediation, and deployment records.
+- Stack: FastAPI + async orchestration
+- Core orchestrator entry:
+  - `app/core/orchestrator.py`
+- Deterministic execution source of truth:
+  - `app/core/execution_engine.py`
+- Project APIs:
+  - `app/api/v1/projects.py`
+  - `app/routes/upload.py`
+  - `app/routes/status.py`
 
-### 3.3 Intelligence and Agent Layer
+### 3.3 Data and Intelligence Layer
 
-Core actors:
+- Operational state: SQLite by default
+- Graph intelligence: Neo4j + NetworkX
+- Similarity memory: Qdrant vector store with in-memory fallback
+- Learned patterns:
+  - `PatternStore` + `SimilarityEngine`
 
-- Meta-Agent / Orchestrator
-- Code Intelligence Agent
-- Security Intelligence Agent
-- Fix Agent
-- Simulation Agent
-- Deployment Agent
-- Knowledge Curation and Learning Layer
-
-## 4) Agent Architecture (Current)
-
-### Agent Roles
-
-1. Meta-Agent / Orchestrator
-- Selects next action from runtime state.
-- Classifies failure categories.
-- Enforces bounded retries and anti-repeat behavior.
-
-2. Code Intelligence Agent
-- Detects framework/runtime patterns.
-- Builds architecture understanding for downstream decisions.
-
-3. Security Intelligence Agent
-- Enriches findings with practical risk context.
-- Supports remediation prioritization.
-
-4. Fix Agent
-- Applies targeted conservative remediations.
-- Records fix attempts and outcomes.
-
-5. Simulation Agent
-- Validates fixes before deploy retries.
-- Prevents blind redeploy loops.
-
-6. Deployment Agent
-- Executes provider deployment workflows.
-- Emits actionable failure metadata.
-
-7. Knowledge Curation / Learning Layer
-- Persists outcomes and traces.
-- Supports improved future recommendations and routing.
-
-## 5) Agent Graph
+## 4) Updated Agent Connectivity Graph
 
 ```mermaid
 flowchart TD
-  U[Source Input: ZIP or GitHub URL] --> EX[Execution Engine]
+  U[Source Intake: ZIP/GitHub/Text] --> ORCH[AgentOrchestrator]
+  ORCH --> EX[ExecutionEngine]
 
-  EX --> CA[Code Intelligence Agent]
-  EX --> SA[Security Intelligence Agent]
-  CA --> EX
-  SA --> EX
+  EX --> A1[Code Intelligence Analyst]
+  EX --> A2[Security Intelligence Expert]
+  EX --> A3[Cost Optimization Specialist]
+  EX --> A4[Platform Selection Strategist]
+  EX --> A5[Fix Agent]
+  EX --> A6[Simulation Agent]
+  EX --> A7[Deployment Agent]
+  EX --> A8[Production Monitoring Analyst]
+  EX --> A9[Knowledge Curation Agent]
 
-  EX --> CH{Execution Path}
+  A1 --> EX
+  A2 --> EX
+  A3 --> EX
+  A4 --> EX
+  A5 --> EX
+  A6 --> EX
+  A7 --> EX
+  A8 --> EX
+  A9 --> EX
 
-  CH -->|Analyze Only| RP[Status and Report]
+  EX --> D{Policy Decision}
+  D -->|Analyze Only| RPT[Status + Report + Audit]
+  D -->|Autonomous Deploy| DEP[Deploy Attempt]
 
-  CH -->|Autonomous Fix and Deploy| DP[Deployment Agent]
-  DP --> OK{Deploy Success?}
+  DEP --> OK{Success?}
+  OK -->|Yes| LIVE[Live URL + Monitoring]
+  OK -->|No| CLASS[Failure Classification]
 
-  OK -->|Yes| SUC[Deployment Complete]
+  CLASS --> FIX[Targeted Fix]
+  FIX --> SIM[Simulation Gate]
+  SIM --> VALID{Valid?}
+  VALID -->|Yes| RETRY[Bounded Retry]
+  VALID -->|No| SWITCH[Provider/Strategy Switch]
 
-  OK -->|No| FC[Failure Classification]
-  FC --> M1[missing_env]
-  FC --> M2[build_error]
-  FC --> M3[dependency_issue]
-  FC --> M4[infra_issue]
-  FC --> M5[unknown]
+  RETRY --> DEP
+  SWITCH --> DEP
 
-  FC --> FX[Fix Agent]
-  FX --> SG[Simulation Agent]
-  SG --> SV{Simulation Valid?}
-
-  SV -->|No| SW[Switch Strategy or Request Input]
-  SV -->|Yes| RT[Bounded Redeploy]
-
-  SW --> DP
-  RT --> DP
-
-  SUC --> LS[Learning and Trace Store]
-  RP --> LS
+  LIVE --> MEM[PatternStore + Similarity Learning]
+  RPT --> MEM
 ```
 
-## 6) Execution Pipeline
+## 5) Execution Modes and Flow
 
-### 6.1 Analyze Path
+### 5.1 Analyze Path
 
-1. Intake source and initialize project state.
-2. Run stack and architecture profiling.
-3. Enrich security and risk findings.
-4. Build deployment and cost reasoning context.
-5. Publish status and report outputs.
+Purpose: build architecture, risk, and deployment intelligence without publishing a live deployment.
 
-Path constraint:
+Core stages:
 
-- Analyze path does not auto-deploy.
+1. code analysis
+2. security audit
+3. learning/cost/platform reasoning
+4. report + audit materialization
 
-### 6.2 Autonomous Fix and Deploy Path
+### 5.2 Autonomous Deploy Path
 
-1. Start deployment attempt.
-2. If failed, classify failure type.
-3. Apply targeted remediation.
-4. Run simulation validation gate.
-5. If valid, retry deployment with bounded attempts.
-6. If invalid or exhausted, switch strategy/provider or request user input.
-7. Mark success or explicit fallback outcome.
+Purpose: perform deployment with bounded autonomous recovery.
 
-## 7) Pipeline Graph
+Core stages:
 
-```mermaid
-flowchart LR
-  A[Intake] --> B[Analyze]
-  B --> C{Path Choice}
-  C -->|Analyze Only| D[Report Complete]
-  C -->|Autonomous Deploy| E[Deploy Attempt]
-  E --> F{Success?}
-  F -->|Yes| G[Complete]
-  F -->|No| H[Classify Failure]
-  H --> I[Apply Fix]
-  I --> J[Simulation Gate]
-  J --> K{Valid?}
-  K -->|No| L[Change Strategy]
-  K -->|Yes| M[Retry Deploy]
-  L --> E
-  M --> E
-  G --> N[Persist Learning]
-  D --> N
-```
+1. deploy attempt
+2. classify failure
+3. apply fix
+4. simulation validation
+5. retry/switch strategy
+6. live URL or explicit fallback outcome
 
-## 8) Runtime State Contract
+### 5.3 Bounded Safety Policy
 
-Execution context tracks policy-critical fields:
+- max self-heal retries: 3
+- anti-repeat action logic
+- blocker escalation with explicit reason
+- no infinite autonomous loops
 
-- failures
-- fixes_applied
-- providers_tried
-- provider_attempts
-- last_failure_type
-- simulation_validated
-- decision_log
+## 6) Agent Skills and Responsibilities
 
-These fields drive anti-repeat policy, adaptive routing, and operator traceability.
+### Meta-Agent / Decision Policy
 
-## 9) Complete Feature Catalog
+- chooses next action from runtime state,
+- enforces retry bounds,
+- prevents repeated identical failure paths.
 
-### 9.1 Source Intake Features
+### Code Intelligence
 
-- ZIP upload workflow.
-- GitHub repository URL intake workflow.
-- Project state initialization and lifecycle status tracking.
-- Temporary private GitHub publishing support for ZIP-only backend deployment scenarios.
+- stack/runtime detection,
+- architecture profiling,
+- deployability context extraction.
 
-### 9.2 Analysis and Intelligence Features
+### Security Intelligence
 
-- Stack/runtime/framework detection.
-- Architecture and dependency profiling.
-- Security and risk enrichment.
-- Deployment suitability reasoning.
-- Cost and platform recommendation context generation.
+- vulnerability aggregation and enrichment,
+- severity-based risk context for planning.
 
-### 9.3 Orchestration and Autonomy Features
+### Fix + Simulation
 
-- Decision-driven orchestration loop.
-- Analyze-only and autonomous deploy path separation.
-- Failure-class-based action routing.
-- Bounded retries with provider caps.
-- Duplicate-fix and repeat-strategy suppression.
-- Strategy/provider switching on exhaustion conditions.
-- User-input request paths for blockers that cannot be safely auto-resolved.
+- deterministic remediation,
+- simulation-gated patch acceptance before retry.
 
-### 9.4 Remediation and Validation Features
+### Deployment Agent
 
-- Controlled fix execution.
-- Simulation-gated retry behavior.
-- Retry deployment only after validation where applicable.
-- Structured failure reason capture for debugging and learning.
+- app-kind detection (`static`, `backend`, `docker`),
+- provider routing,
+- structured failure metadata,
+- local fallback when credentials are missing.
 
-### 9.5 Deployment Features
+### Monitoring + Learning
 
-- Cloud-first deployment strategy.
-- Provider-aware deployment logic.
-- Explicit fallback semantics when cloud deployment cannot complete.
-- Attempt-by-attempt deployment outcome tracking.
-- Railway workspace-aware behavior through RAILWAY_WORKSPACE_ID when required.
+- runtime telemetry interpretation,
+- persistent deployment outcome pattern memory,
+- similarity-guided future recommendations.
 
-### 9.6 Frontend and Operator Experience Features
+## 7) Deployment Platform Policy and Why
 
-- Upload, Analysis, and Deployment experience.
-- Realtime execution stream over WebSocket.
-- Polling fallback for snapshot consistency.
-- Compressed high-signal feed:
-  - decision/action/outcome emphasis,
-  - duplicate event merge,
-  - retry collapse,
-  - reasoning-noise suppression.
-- Summary-first deployment layout with practical controls.
+Current routing policy in `DeploymentAgent`:
 
-### 9.7 Reporting and Audit Features
+- static/spa/ssg -> Vercel
+- backend/api/fullstack/docker -> Railway
+- Netlify supported for static deployment alternatives
+- local preview fallback when required cloud credentials are unavailable
 
-- Status reporting.
-- Project report generation.
-- Audit report endpoint.
-- PDF export endpoint.
+Why:
 
-### 9.8 Learning and Historical Features
+- static-first platforms provide strong CDN/static UX,
+- Railway aligns well with backend runtime hosting,
+- fallback keeps the workflow non-blocking for users.
 
-- Persistence of outcomes and execution traces.
-- Reuse of historical data for future decision quality.
-- Learning statistics support in API layer.
+## 8) Updated Feature Inventory
 
-## 10) Feature Status Snapshot
+### 8.1 Intake and Project Lifecycle
 
-### Implemented and Active
+- ZIP/GitHub/Text ingestion
+- project source persistence
+- lifecycle status APIs
+- readiness/progress contracts
 
-- Decision-driven orchestration core.
-- Analyze/deploy path separation.
-- Failure classification and adaptive routing.
-- Bounded retries with anti-repeat safeguards.
-- Simulation-gated remediation loop.
-- Compressed deployment feed UX.
-- Core project, report, and deploy API surface.
+### 8.2 Analysis and Intelligence
 
-### Expanding
+- code profile extraction
+- security findings + grouped severity
+- cost optimization matrix
+- platform recommendation and debate support
 
-- Additional failure-class-specific remediation depth.
-- Richer confidence outputs from simulation and policy reasoning.
-- Wider scenario-based integration test coverage for routing behavior.
+### 8.3 Autonomous Recovery and Deployment
 
-## 11) API Surface (High-Value)
+- failure classification (`missing_env`, `build_error`, `dependency_issue`, `infra_issue`, `unknown`)
+- fix generation and simulation validation
+- bounded retries and provider switching
+- structured deploy response contract with next-action guidance
 
-- POST /api/v1/projects/upload
-- POST /api/v1/projects/github
-- GET /api/v1/projects/{project_id}/status
-- GET /api/v1/projects/{project_id}/report
-- GET /api/v1/projects/{project_id}/report/audit
-- GET /api/v1/projects/{project_id}/report/pdf
-- POST /api/v1/projects/{project_id}/autonomous-fix-deploy
+### 8.4 Frontend UX Contracts
 
-## 12) Security and Repository Hygiene
+- staged analysis progress
+- structured one-line feed
+- deploy step progress + completion bar
+- changes-applied diff section
+- final result card with URL/confidence/failure guidance
 
-- Do not commit .env files or secrets.
-- Do not commit local database files or sidecar variants.
-- Do not commit runtime snapshots or generated source dumps.
-- Do not commit node_modules, dist, or virtual environment folders.
-- Prefer private repository visibility for first publication.
+### 8.5 Reporting and Audit
 
-## 13) Quick Start
+- project report endpoint
+- audit payload endpoint
+- downloadable PDF report
 
-### Backend
+### 8.6 Learning and Memory
 
-1. Create and activate a virtual environment.
-2. Install dependencies from requirements.txt.
-3. Run the FastAPI app from app.main.
+- deployment pattern store
+- vector similarity retrieval
+- recommendation extraction from historical outcomes
 
-### Frontend
+## 9) Key APIs
 
-1. Install frontend dependencies.
-2. Run Vite development server.
+- `POST /api/v1/projects/upload`
+- `POST /api/v1/projects/github`
+- `GET /api/v1/projects/{project_id}/status`
+- `GET /api/status/{project_id}`
+- `GET /api/v1/projects/{project_id}/autonomous-response`
+- `POST /api/v1/projects/{project_id}/autonomous-fix-deploy`
+- `GET /api/v1/projects/{project_id}/report`
+- `GET /api/v1/projects/{project_id}/report/audit`
+- `GET /api/v1/projects/{project_id}/report/pdf`
 
-## 14) Operational Checklist
+## 10) Tech Stack and Justification
 
-- Frontend build succeeds.
-- Backend syntax/compile checks succeed.
-- Analyze and autonomous deploy flows are validated.
-- Execution feed remains concise and high-signal.
-- No secret or runtime artifacts are staged in git.
+Backend:
 
-## 15) Related Documents
+- FastAPI + Uvicorn: async orchestration and API throughput
+- Pydantic: strict contract validation
+- httpx: resilient provider/LLM HTTP integration
 
-- Implementation detail reference: README_ARCHITECTURE.md
-- Deployment and environment setup: DEPLOYMENT_GUIDE.md
+Frontend:
+
+- React + Vite: fast iteration and modular UI composition
+- Framer Motion: meaningful motion for state transitions
+- Axios: stable API polling and request handling
+
+Intelligence:
+
+- Neo4j + NetworkX: architecture graph and dependency intelligence
+- Qdrant (with fallback): scalable vector memory retrieval
+- scikit-learn/numpy fallback path for embedding resilience
+
+## 11) Security and Repo Hygiene
+
+- do not commit `.env` or secrets
+- do not commit runtime dumps, DB sidecars, or generated source snapshots
+- do not commit virtual environment directories or build artifacts
+
+## 12) Related Docs
+
+- `README_ARCHITECTURE.md`
+- `DEPLOYMENT_GUIDE.md`
+- `docs/NESTIFY_ENGINEERING_JUSTIFICATION.md`
