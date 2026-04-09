@@ -141,9 +141,9 @@ export default function UploadPage() {
     <div className="focus-shell" style={{ minHeight: 'calc(100vh - 120px)' }}>
       <motion.section className="page" initial={fadeInUp.initial} animate={fadeInUp.animate} transition={fadeInUp.transition}>
         <div className="pill minimal-pill">
-          <Sparkles size={12} /> AI execution starts here
+          <Sparkles size={12} /> Input workspace
         </div>
-        <h1 className="hero-title">Upload your app. Nestify handles the rest.</h1>
+        <h1 className="hero-title">Provide source input and launch autonomous analysis.</h1>
         <p className="muted" style={{ maxWidth: 760 }}>
           One action starts analysis, deployment planning, and autonomous execution. Technical detail is available when you need it.
         </p>
@@ -161,7 +161,7 @@ export default function UploadPage() {
                 setError(null);
               }}
             >
-              Upload File
+              Upload ZIP
             </button>
             <button
               type="button"
@@ -172,7 +172,7 @@ export default function UploadPage() {
                 setError(null);
               }}
             >
-              GitHub Link
+              GitHub Repo
             </button>
           </div>
 
@@ -265,7 +265,7 @@ export default function UploadPage() {
               onClick={deploy}
               disabled={sourceType === 'file' ? !file : !githubUrl.trim()}
             >
-              {loading ? 'Starting AI execution...' : 'Start AI Execution'}
+              {loading ? 'Preparing analysis...' : 'Analyze & Prepare'}
             </Button>
           </div>
           {loading ? (
@@ -300,7 +300,7 @@ export default function UploadPage() {
               variant="empty"
               className="fade-in"
               title="Upload a project to begin"
-              detail="Drop a ZIP file or switch to GitHub Link to continue."
+              detail="Drop a ZIP file or switch to GitHub Repo to continue."
             />
           ) : null}
 

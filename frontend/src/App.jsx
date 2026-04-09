@@ -88,10 +88,10 @@ function AppFrame() {
   }, [lastProjectId]);
 
   const navTabs = useMemo(() => {
-    const upload = { key: 'upload', label: 'Upload', path: navTargets.upload, enabled: true, complete: journey.hasProject };
+    const upload = { key: 'upload', label: 'Input', path: navTargets.upload, enabled: true, complete: journey.hasProject };
     const analyse = {
       key: 'analyse',
-      label: 'Analyse',
+      label: 'Analysis',
       path: navTargets.analysis,
       enabled: journey.hasProject,
       complete: journey.analysisComplete,
@@ -115,7 +115,7 @@ function AppFrame() {
 
   const activeTabLabel = useMemo(() => {
     const active = navTabs.find((tab) => location.pathname === tab.path || location.pathname.startsWith(`${tab.path}/`));
-    return active?.label || 'Upload';
+    return active?.label || 'Input';
   }, [location.pathname, navTabs]);
 
   useEffect(() => {
