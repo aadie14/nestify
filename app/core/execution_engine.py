@@ -24,6 +24,7 @@ from app.agents.fix_agent import FixAgent
 from app.agents.security_agent import SecurityAgent
 from app.agents.simulation_agent import PatchSpec, SimulationAgent
 from app.database import add_log, update_project
+from app.core.feed_formatter import format_feed_event, standard_agent_output
 from app.runtime.metrics_analyzer import MetricsAnalyzer
 from app.runtime.provider_metrics import ProviderMetricsCollector
 from app.services.project_source_service import get_project_source_dir, load_source_text_map
@@ -144,14 +145,8 @@ class ExecutionEngine:
         confidence: float | None,
         pattern: str | None,
     ) -> str:
-        parts = [str(base).strip()]
-        if pattern:
-            parts.append(str(pattern).strip())
-        if reasoning:
-            parts.append(f"Reasoning: {str(reasoning).strip()}")
-        if confidence is not None:
-            parts.append(self._confidence_language(confidence))
-        return " ".join(part for part in parts if part)
+        # Keep operator feed concise and deterministic (no raw reasoning text).
+        return " ".join(str(base or "").split())
 
     def _emit(
         self,
@@ -163,27 +158,29 @@ class ExecutionEngine:
         confidence: float | None = None,
         pattern: str | None = None,
     ) -> None:
-        composed_message = self._compose_reasoned_message(
-            base=message,
-            reasoning=reasoning,
+        composed_message = self._compose_reasoned_message(message, reasoning, confidence, pattern)
+        feed_event = format_feed_event(
+            agent=agent,
+            event_type="status",
+            title=phase,
+            message=composed_message,
+            severity="info",
+            action=data.get("action") if isinstance(data, dict) else None,
             confidence=confidence,
-            pattern=pattern,
+            data=data if isinstance(data, dict) else None,
         )
         payload: dict[str, Any] = {
             "agent": agent,
             "phase": phase,
-            "message": composed_message,
+            "message": str(feed_event.get("message") or composed_message),
             "timestamp": time.time(),
             "cycle": int(getattr(self, "_cycle", 0)),
             "execution_step": self.state.step,
             "execution_state": asdict(self.state),
+            "feed": feed_event,
         }
-        if reasoning is not None:
-            payload["reasoning"] = reasoning
         if confidence is not None:
             payload["confidence"] = max(0.0, min(1.0, float(confidence)))
-        if pattern:
-            payload["pattern"] = pattern
         if data is not None:
             payload["data"] = data
         self.on_progress(payload)
@@ -197,9 +194,19 @@ class ExecutionEngine:
         evidence: list[str] | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
+        feed_event = format_feed_event(
+            agent=agent,
+            event_type="decision",
+            title="decision",
+            message=user_message,
+            severity="info",
+            action=action,
+            confidence=confidence,
+            data=data if isinstance(data, dict) else None,
+        )
         item = {
             "agent": agent,
-            "user_message": user_message,
+            "user_message": str(feed_event.get("message") or user_message),
             "action": action,
             "confidence": max(0.0, min(1.0, float(confidence))),
             "evidence": evidence or [],
@@ -212,13 +219,13 @@ class ExecutionEngine:
             "timestamp": item["timestamp"],
             "cycle": int(getattr(self, "_cycle", 0)),
             "agent": agent,
-            "user_message": user_message,
-            "decision": user_message,
-            "thought": user_message,
+            "user_message": item["user_message"],
+            "decision": item["user_message"],
             "action": action,
             "confidence": item["confidence"],
             "evidence": item["evidence"],
             "data": item["data"],
+            "feed": feed_event,
         })
 
     @staticmethod
@@ -251,6 +258,66 @@ class ExecutionEngine:
         message = str(error)
         self.state.errors.append(message)
         add_log(self.project_id, "ExecutionEngine", message, "error")
+
+    def _emit_stage_log(self, stage: str, status: str, start_ts: float) -> None:
+        latency_ms = int(max(0.0, (time.perf_counter() - start_ts) * 1000.0))
+        payload = {
+            "stage": str(stage),
+            "status": str(status),
+            "latency_ms": latency_ms,
+        }
+        add_log(self.project_id, "ExecutionEngine", str(payload), "info")
+
+    def _build_plan(self, files: list[dict[str, str]]) -> dict[str, Any]:
+        file_count = len(files)
+        risk = "low"
+        if file_count > 30:
+            risk = "medium"
+        if file_count > 120:
+            risk = "high"
+        return {
+            "tasks": [
+                "code_analysis",
+                "security_analysis",
+                "cost_estimation",
+                "platform_selection",
+            ],
+            "parallel": ["code_analysis", "security_analysis"],
+            "risk_level": risk,
+        }
+
+    def _derive_memory_signals(self, similar_deployments: list[dict[str, Any]]) -> dict[str, Any]:
+        rows = similar_deployments if isinstance(similar_deployments, list) else []
+        if not rows:
+            return {
+                "historical_success_rate": 0.0,
+                "common_failures": [],
+                "recommended_actions": [],
+            }
+
+        total = len(rows)
+        success = 0
+        failure_buckets: dict[str, int] = {}
+        for row in rows:
+            if bool(row.get("success")):
+                success += 1
+            for fix in (row.get("fixes_applied") or []):
+                key = str(fix or "unknown").strip().lower()
+                if key:
+                    failure_buckets[key] = int(failure_buckets.get(key, 0)) + 1
+
+        common_failures = [
+            item for item, _ in sorted(failure_buckets.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        ]
+        recommended_actions = []
+        if common_failures:
+            recommended_actions = [f"preempt_{item}" for item in common_failures[:3]]
+
+        return {
+            "historical_success_rate": round(success / max(1, total), 2),
+            "common_failures": common_failures,
+            "recommended_actions": recommended_actions,
+        }
 
     @staticmethod
     def _detect_entry_points(files: list[dict[str, str]]) -> list[str]:
@@ -428,7 +495,24 @@ class ExecutionEngine:
         monitor_agent = ProductionMonitoringAnalyst()
         enrichment = await monitor_agent.monitor(deployment_url=deployment_url, allocated_memory_mb=None)
 
+        monitor_metrics = {
+            "p50": runtime.get("p50_ms"),
+            "p95": runtime.get("p95_ms"),
+            "p99": runtime.get("p99_ms"),
+            "error_rate": runtime.get("error_rate"),
+        }
+        status = "healthy" if float(runtime.get("error_rate") or 0.0) <= 0.01 else "degraded"
+        recommendations = []
+        if isinstance(enrichment.get("recommendations"), list):
+            recommendations = [
+                str(item.get("action") or item) if isinstance(item, dict) else str(item)
+                for item in enrichment.get("recommendations")[:8]
+            ]
+
         return {
+            "metrics": monitor_metrics,
+            "status": status,
+            "recommendations": recommendations,
             "runtime": runtime,
             "agent_report": enrichment,
             "provider_metrics": provider_metrics,
@@ -477,6 +561,7 @@ class ExecutionEngine:
         pdf_path: str | None = None
         source_payload = project.get("source_payload") if isinstance(project.get("source_payload"), dict) else parsed_input
         analysis_only = bool(parsed_input.get("analysis_only"))
+        execution_plan = self._build_plan(files)
 
         # Shared context for meta-agent control loop.
         context: dict[str, Any] = {
@@ -509,6 +594,14 @@ class ExecutionEngine:
             "last_outcome": None,
             "result_classification": "partial",
             "analysis_only": analysis_only,
+            "plan": execution_plan,
+            "plan_applied": False,
+            "agent_outputs": {},
+            "memory_signals": {
+                "historical_success_rate": 0.0,
+                "common_failures": [],
+                "recommended_actions": [],
+            },
         }
 
         def _decision_entry(thought: str, action: str, reason: str, confidence: float) -> dict[str, Any]:
@@ -531,6 +624,15 @@ class ExecutionEngine:
                     "Goal achieved and live deployment verified.",
                     "stop_with_explanation",
                     "No additional execution needed.",
+                    context["confidence"],
+                )
+
+            if not context.get("plan_applied"):
+                plan = context.get("plan") or {}
+                return _decision_entry(
+                    "Applying deterministic execution plan.",
+                    "analyze_code",
+                    f"Plan tasks={plan.get('tasks', [])}; parallel={plan.get('parallel', [])}",
                     context["confidence"],
                 )
 
@@ -611,6 +713,15 @@ class ExecutionEngine:
                 provider = str(last.get("provider") or context.get("preferred_provider") or "auto")
                 provider_attempts = int((context.get("provider_attempts") or {}).get(provider, 0))
                 repeated_failure = int((context.get("failure_type_counts") or {}).get(failure_type, 0)) >= 2
+                memory_signals = context.get("memory_signals") or {}
+                recommended_actions = memory_signals.get("recommended_actions") or []
+                if any("provider" in str(item).lower() for item in recommended_actions) and failure_type in {"infra_issue", "unknown"}:
+                    return _decision_entry(
+                        "Historical signals indicate provider mismatch risk.",
+                        "switch_provider",
+                        "Learning signals recommend provider adaptation for this failure profile.",
+                        context["confidence"],
+                    )
 
                 if provider_attempts >= 2:
                     return _decision_entry(
@@ -659,7 +770,7 @@ class ExecutionEngine:
                         context["confidence"],
                     )
 
-                if context.get("deploy_attempts", 0) < 6:
+                if context.get("deploy_attempts", 0) < 3:
                     return _decision_entry(
                         "Unknown failure; applying conservative remediation before next deployment.",
                         "fix_code",
@@ -707,20 +818,30 @@ class ExecutionEngine:
         async def _action_analyze_code() -> dict[str, Any]:
             nonlocal final_scan, risk_dict, graph_stats, cost_analysis, debate_result, insights
             self._set_step(ExecutionStep.CODE_ANALYSIS)
+            started_at = time.perf_counter()
             self._emit(
                 "CodeAnalyzer",
                 "analyzing",
-                "I am mapping stack, dependencies, and entry points before selecting a deployment path.",
-                reasoning="Deployment and fix quality improves when architecture and startup paths are identified early.",
+                "Analyzing code and security in controlled parallel mode.",
                 confidence=context.get("confidence"),
-                pattern=self._pattern_hint(context, "analyze_code"),
             )
 
-            initial_scan = await security_agent.scan(files)
+            async def _security_task():
+                return await security_agent.scan(files)
+
+            async def _code_task():
+                profile = await coordinator.code_agent.analyze(files=files, graph=None)
+                return profile.to_dict()
+
+            initial_scan, code_profile = await asyncio.gather(_security_task(), _code_task())
             final_scan = initial_scan
             risk_dict = initial_scan.risk_report.to_dict() if initial_scan.risk_report else {}
             graph_stats = dict(initial_scan.metadata or {})
-            insights = await coordinator.run_analyzing_phase(files, initial_scan.graph, insights)
+            insights.code_profile = code_profile
+
+            # Derive memory signals for deterministic strategy hints.
+            insights = await coordinator.run_deploying_entry_phase(insights)
+            context["memory_signals"] = self._derive_memory_signals(insights.similar_deployments or [])
 
             execution_test = await self._run_execution_test(files, insights.code_profile)
             self.pipeline_states["execution_test"] = "done" if execution_test.get("success") else "failed"
@@ -739,7 +860,33 @@ class ExecutionEngine:
                 similar_deployments=insights.similar_deployments,
             )
 
+            context["agent_outputs"]["cost_estimation"] = standard_agent_output(
+                agent="CostOptimizationSpecialist",
+                status="success",
+                data=cost_analysis if isinstance(cost_analysis, dict) else {},
+                confidence=float((cost_analysis or {}).get("recommended", {}).get("benchmark", {}).get("success_rate") or 0.7),
+                risk="medium",
+            )
+            context["agent_outputs"]["platform_selection"] = standard_agent_output(
+                agent="PlatformSelectionStrategist",
+                status="success",
+                data={
+                    "chosen_platform": debate_result.get("chosen_platform"),
+                    "confidence": debate_result.get("confidence"),
+                },
+                confidence=float(debate_result.get("confidence") or 0.7),
+                risk="medium",
+            )
+
             chosen_platform = str(debate_result.get("chosen_platform") or cost_analysis.get("provider") or "railway").lower()
+            memory_rate = float((context.get("memory_signals") or {}).get("historical_success_rate") or 0.0)
+            if memory_rate >= 0.8:
+                learned_candidates = insights.similar_deployments or []
+                if learned_candidates:
+                    top = learned_candidates[0]
+                    learned_provider = str(top.get("platform_choice") or "").strip().lower()
+                    if learned_provider:
+                        chosen_platform = learned_provider
             context["preferred_provider"] = chosen_platform
             context["analysis"] = {
                 "stack": initial_scan.metadata or {},
@@ -748,6 +895,31 @@ class ExecutionEngine:
                 "chosen_platform": chosen_platform,
             }
             context["stack_info"] = security_agent._detect_stack(files)
+            context["security_scanned"] = True
+            context["plan_applied"] = True
+
+            code_output = standard_agent_output(
+                agent="CodeIntelligenceAnalyst",
+                status="success",
+                data={
+                    "profile": insights.code_profile or {},
+                    "entry_points": self._detect_entry_points(files),
+                },
+                confidence=float(context.get("confidence") or 0.65),
+                risk=str(execution_plan.get("risk_level") or "medium"),
+            )
+            security_output = standard_agent_output(
+                agent="SecurityIntelligenceExpert",
+                status="success",
+                data={
+                    "summary": initial_scan.report,
+                    "risk_report": risk_dict,
+                },
+                confidence=float(context.get("confidence") or 0.65),
+                risk="high" if int(initial_scan.score or 0) < 60 else "medium",
+            )
+            context["agent_outputs"]["code_analysis"] = code_output
+            context["agent_outputs"]["security_analysis"] = security_output
 
             update_project(
                 self.project_id,
@@ -768,12 +940,15 @@ class ExecutionEngine:
             self.pipeline_states["agentic_platform_strategist"] = "done"
             self.pipeline_states["cost_analysis"] = "done"
             self.pipeline_states["agentic_cost_optimizer"] = "done"
+            self._emit_stage_log("analysis", "success", started_at)
             self._emit(
                 "CodeAnalyzer",
                 "complete",
-                "Analysis is complete and the execution strategy has been updated.",
-                context["analysis"],
-                reasoning="Detected stack traits and entry points now inform provider choice, remediation order, and risk handling.",
+                "Analysis complete and deployment strategy selected.",
+                {
+                    "chosen_platform": chosen_platform,
+                    "risk_level": execution_plan.get("risk_level"),
+                },
                 confidence=context.get("confidence"),
             )
 
@@ -792,6 +967,16 @@ class ExecutionEngine:
                 insights=insights,
             )
             context["security_scanned"] = True
+            context["agent_outputs"]["security_analysis"] = standard_agent_output(
+                agent="SecurityIntelligenceExpert",
+                status="success",
+                data={
+                    "summary": final_scan.report,
+                    "risk_report": risk_dict,
+                },
+                confidence=float(context.get("confidence") or 0.7),
+                risk="high" if int(final_scan.score or 0) < 60 else "medium",
+            )
             self.pipeline_states["security_audit"] = "done"
             self._emit(
                 "SecurityAgent",
@@ -845,6 +1030,16 @@ class ExecutionEngine:
                 for item in fix_report.get("applied", [])
             ]
             context["simulation_validated"] = len(fix_report.get("simulation_blocked", [])) == 0
+            context["agent_outputs"]["fixes"] = standard_agent_output(
+                agent="SelfHealingDeploymentEngineer",
+                status="success",
+                data={
+                    "applied": fix_report.get("applied", []),
+                    "manual_review": fix_report.get("manual_review", []),
+                },
+                confidence=float(context.get("confidence") or 0.7),
+                risk="medium",
+            )
             self.pipeline_states["auto_fixes"] = "done"
             self.pipeline_states["fix_agent"] = "done"
             self._emit(
@@ -892,6 +1087,13 @@ class ExecutionEngine:
             blocked = len(fix_report.get("simulation_blocked", [])) if isinstance(fix_report, dict) else 0
             passed = blocked == 0
             context["simulation_validated"] = passed
+            context["agent_outputs"]["simulation"] = standard_agent_output(
+                agent="SelfHealingDeploymentEngineer",
+                status="success" if passed else "failed",
+                data={"blocked": blocked, "validated": passed},
+                confidence=float(context.get("confidence") or 0.7),
+                risk="low" if passed else "high",
+            )
             self.pipeline_states["run_simulation"] = "done" if passed else "failed"
             self._emit(
                 "SimulationAgent",
@@ -1125,6 +1327,46 @@ class ExecutionEngine:
             self.pipeline_states["self_healing_loop"] = "done"
             self.pipeline_states["agentic_self_healer"] = "done"
 
+            context["agent_outputs"]["deployment"] = standard_agent_output(
+                agent="SelfHealingDeploymentEngineer",
+                status="success",
+                data={
+                    "provider": deployed.provider,
+                    "deployment_url": deployed.deployment_url,
+                    "attempts": context.get("self_heal_attempts", []),
+                },
+                confidence=float(context.get("confidence") or 0.75),
+                risk="low",
+            )
+            context["agent_outputs"]["monitoring"] = standard_agent_output(
+                agent="ProductionMonitoringAnalyst",
+                status="success",
+                data=monitoring_payload if isinstance(monitoring_payload, dict) else {},
+                confidence=0.8,
+                risk="low" if (monitoring_payload or {}).get("status") == "healthy" else "medium",
+            )
+            context["agent_outputs"]["knowledge"] = standard_agent_output(
+                agent="KnowledgeCurationAgent",
+                status="success",
+                data={"memory_signals": context.get("memory_signals", {})},
+                confidence=0.75,
+                risk="low",
+            )
+
+            context.setdefault("self_heal_attempts", []).append(
+                {
+                    "attempt": int(context.get("deploy_attempts") or 0),
+                    "provider": str(deployed.provider or provider_key),
+                    "status": "success",
+                    "reason": "deployment_succeeded",
+                    "fix_applied": (
+                        context.get("fixes_applied", [{}])[-1].get("fix_type")
+                        if context.get("fixes_applied")
+                        else None
+                    ),
+                }
+            )
+
             pdf_path = await coordinator.generate_security_pdf(
                 project_id=self.project_id,
                 project_name=str(project.get("name") or f"project-{self.project_id}"),
@@ -1267,13 +1509,16 @@ class ExecutionEngine:
                     decision["reason"] = "Avoid repeating identical action twice; adapting strategy."
                 error_text: str | None = None
                 result: dict[str, Any] | None = None
+                action_started_at = time.perf_counter()
 
                 try:
                     result = await _execute_action(action)
+                    self._emit_stage_log(action, "success", action_started_at)
                     context["actions_taken"].append({"action": action, "result": result})
                     context["current_state"] = "running" if not context.get("goal_achieved") else "goal_achieved"
                 except Exception as exc:
                     error_text = str(exc)
+                    self._emit_stage_log(action, "failed", action_started_at)
                     self._record_error(exc)
                     failure_type = self._classify_failure(error_text)
                     context["last_failure_type"] = failure_type
@@ -1317,9 +1562,15 @@ class ExecutionEngine:
                         context["self_heal_attempts"].append(
                             {
                                 "attempt": int(context.get("deploy_attempts") or 0),
+                                "provider": str(context.get("preferred_provider") or "auto"),
                                 "status": "failed",
+                                "reason": error_text,
                                 "failure_type": failure_type,
-                                "error": error_text,
+                                "fix_applied": (
+                                    context.get("fixes_applied", [{}])[-1].get("fix_type")
+                                    if context.get("fixes_applied")
+                                    else None
+                                ),
                             }
                         )
                     if action == "stop_with_explanation":
@@ -1366,6 +1617,33 @@ class ExecutionEngine:
             insights.production_insights = monitoring_payload
 
             insights_dict = coordinator.to_dict(insights)
+            security_issues = []
+            for severity in ("critical", "high", "medium"):
+                for issue in ((final_scan.report or {}).get(severity, []) if final_scan else []):
+                    if not isinstance(issue, dict):
+                        continue
+                    security_issues.append(
+                        {
+                            "severity": severity,
+                            "title": issue.get("title") or issue.get("type") or "security_issue",
+                            "message": issue.get("description") or issue.get("message") or "Issue detected",
+                            "action": issue.get("recommendation") or "Review and remediate",
+                        }
+                    )
+
+            consolidated_audit = {
+                "summary": f"Execution finished with status {final_status}.",
+                "security_issues": security_issues,
+                "fixes": fix_report.get("applied", []) if isinstance(fix_report, dict) else [],
+                "deployment_plan": {
+                    "platform": chosen_platform,
+                    "reason": (debate_result.get("reasoning") if isinstance(debate_result, dict) else "Deterministic policy selection"),
+                    "confidence": float(context.get("confidence") or 0.0),
+                },
+                "cost_estimate": cost_analysis or {},
+                "confidence_score": round(float(context.get("confidence") or 0.0), 2),
+            }
+            insights_dict["autonomous_audit"] = consolidated_audit
             insights_dict["meta_agent"] = {
                 "goal": context.get("goal"),
                 "current_state": context.get("current_state"),
@@ -1378,6 +1656,9 @@ class ExecutionEngine:
                 "providers_tried": context.get("providers_tried", []),
                 "provider_attempts": context.get("provider_attempts", {}),
                 "last_failure_type": context.get("last_failure_type"),
+                "self_heal_attempts": context.get("self_heal_attempts", []),
+                "memory_signals": context.get("memory_signals", {}),
+                "agent_outputs": context.get("agent_outputs", {}),
             }
 
             update_project(
@@ -1453,6 +1734,9 @@ class ExecutionEngine:
                         "providers_tried": context.get("providers_tried", []),
                         "provider_attempts": context.get("provider_attempts", {}),
                         "last_failure_type": context.get("last_failure_type"),
+                        "self_heal_attempts": context.get("self_heal_attempts", []),
+                        "memory_signals": context.get("memory_signals", {}),
+                        "agent_outputs": context.get("agent_outputs", {}),
                     }
                 },
             )

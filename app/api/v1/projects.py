@@ -248,7 +248,7 @@ async def get_report(project_id: int) -> dict[str, Any]:
         "deployment": get_deployment(project_id),
         "logs": project_logs,
         "remediation_steps": remediation_steps,
-        "agentic_insights": _parse_json(project.get("agentic_insights")) or {},
+        "agentic_insights": _sanitize_agentic_insights(_parse_json(project.get("agentic_insights")) or {}),
     }
 
     # Attach latest outcome/debate record for agent timeline visualizations.
@@ -758,7 +758,7 @@ async def get_project_deployment(project_id: int) -> dict[str, Any]:
             "deployment_url": None,
             "provider": None,
             "details": {},
-            "agentic_insights": _parse_json(project.get("agentic_insights")) or {},
+            "agentic_insights": _sanitize_agentic_insights(_parse_json(project.get("agentic_insights")) or {}),
             "security_report_pdf": project.get("security_report_pdf"),
         }
 
@@ -772,8 +772,141 @@ async def get_project_deployment(project_id: int) -> dict[str, Any]:
         "deployment_url": deployment.get("deployment_url"),
         "provider": provider,
         "details": details,
-        "agentic_insights": _parse_json(project.get("agentic_insights")) or {},
+        "agentic_insights": _sanitize_agentic_insights(_parse_json(project.get("agentic_insights")) or {}),
         "security_report_pdf": project.get("security_report_pdf"),
+    }
+
+
+@router.get("/{project_id}/autonomous-response")
+async def get_autonomous_response(project_id: int) -> dict[str, Any]:
+    """Return clean structured autonomous response contract for UI consumption."""
+
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    report = await get_report(project_id)
+    deployment = await get_project_deployment(project_id)
+    progress_entries = pipeline_progress.get(project_id, [])[-120:]
+
+    feed: list[dict[str, Any]] = []
+    for item in progress_entries:
+        if not isinstance(item, dict):
+            continue
+        feed_item = item.get("feed") if isinstance(item.get("feed"), dict) else None
+        if not feed_item:
+            feed_item = {
+                "agent": str(item.get("agent") or "system").lower(),
+                "type": "status",
+                "title": str(item.get("phase") or "update"),
+                "severity": "info",
+                "message": " ".join(str(item.get("message") or "").split())[:160],
+                "timestamp": item.get("timestamp"),
+            }
+        feed.append(feed_item)
+
+    findings = report.get("findings") if isinstance(report.get("findings"), dict) else {}
+    security_issues = []
+    for level in ("critical", "high", "medium"):
+        for issue in (findings.get(level) or [])[:20]:
+            security_issues.append(
+                {
+                    "severity": level,
+                    "title": issue.get("title") or issue.get("type") or "security_issue",
+                    "message": issue.get("description") or issue.get("message") or "Issue detected",
+                    "action": issue.get("recommendation") or "Review and remediate",
+                }
+            )
+
+    insights = report.get("agentic_insights") if isinstance(report.get("agentic_insights"), dict) else {}
+    deploy_intel = insights.get("deployment_intelligence") if isinstance(insights.get("deployment_intelligence"), dict) else {}
+    cost_opt = insights.get("cost_optimization") if isinstance(insights.get("cost_optimization"), dict) else {}
+    recommended = cost_opt.get("recommended") if isinstance(cost_opt.get("recommended"), dict) else {}
+    self_heal = insights.get("self_healing_report") if isinstance(insights.get("self_healing_report"), dict) else {}
+    meta_agent = insights.get("meta_agent") if isinstance(insights.get("meta_agent"), dict) else {}
+
+    attempts = self_heal.get("attempts") if isinstance(self_heal.get("attempts"), list) else []
+    if not attempts:
+        attempts = meta_agent.get("self_heal_attempts") if isinstance(meta_agent.get("self_heal_attempts"), list) else []
+    if not attempts:
+        derived_attempts: list[dict[str, Any]] = []
+        attempt_no = 0
+        for item in progress_entries:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("agent") or "") != "DeploymentAgent":
+                continue
+            message = str(item.get("message") or "").lower()
+            details = item.get("data") if isinstance(item.get("data"), dict) else {}
+            if "deployment execution" in message or details.get("action") == "Starting deployment execution":
+                attempt_no += 1
+                derived_attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "provider": deployment.get("provider") or "auto",
+                        "status": "in_progress",
+                        "reason": details.get("reason") or "deployment_started",
+                        "fix_applied": None,
+                    }
+                )
+            if derived_attempts and ("failed" in message or details.get("result") == "Recovery instructions prepared"):
+                derived_attempts[-1]["status"] = "failed"
+                derived_attempts[-1]["reason"] = details.get("reason") or "deployment_failed"
+        attempts = derived_attempts
+
+    final_url = deployment.get("deployment_url") or project.get("public_url")
+    deployment_status = "success" if final_url else "failed"
+    deployment_contract = {
+        "status": deployment_status,
+        "attempts": attempts,
+        "final_url": final_url,
+        "failure_reason": None if final_url else (deployment.get("details") or {}).get("reason"),
+    }
+
+    runtime_monitoring = insights.get("production_insights") if isinstance(insights.get("production_insights"), dict) else {}
+    metrics = (runtime_monitoring.get("runtime") or {}) if isinstance(runtime_monitoring.get("runtime"), dict) else {}
+    recommendations = []
+    agent_report = runtime_monitoring.get("agent_report") if isinstance(runtime_monitoring.get("agent_report"), dict) else {}
+    if isinstance(agent_report.get("recommendations"), list):
+        recommendations = [str(item.get("action") or item) for item in agent_report.get("recommendations")[:6]]
+    monitoring_contract = {
+        "metrics": {
+            "p50": metrics.get("p50_ms"),
+            "p95": metrics.get("p95_ms"),
+            "p99": metrics.get("p99_ms"),
+            "error_rate": metrics.get("error_rate"),
+        },
+        "status": "healthy" if (metrics.get("error_rate") or 0) <= 0.01 else "degraded",
+        "recommendations": recommendations,
+    }
+
+    confidence_values = [
+        float(deploy_intel.get("confidence") or 0.0),
+        float(meta_agent.get("confidence") or 0.0),
+    ]
+    confidence_score = round(sum(confidence_values) / max(1, len(confidence_values)), 2)
+    audit = {
+        "summary": f"Project {project_id} processed with status {project.get('status')}.",
+        "security_issues": security_issues,
+        "fixes": report.get("fixes") if isinstance(report.get("fixes"), list) else [],
+        "deployment_plan": {
+            "platform": deploy_intel.get("chosen_platform") or deployment.get("provider"),
+            "reason": deploy_intel.get("reasoning") or (deployment.get("details") or {}).get("note") or "Deterministic policy selection",
+            "confidence": float(deploy_intel.get("confidence") or 0.0),
+        },
+        "cost_estimate": {
+            "provider": cost_opt.get("provider"),
+            "monthly_cost_usd": recommended.get("monthly_cost_usd"),
+            "config": recommended.get("config") if isinstance(recommended.get("config"), dict) else {},
+        },
+        "confidence_score": confidence_score,
+    }
+
+    return {
+        "feed": feed,
+        "audit": audit,
+        "deployment": deployment_contract,
+        "monitoring": monitoring_contract,
     }
 
 
@@ -797,6 +930,7 @@ async def websocket_updates(websocket: WebSocket, project_id: int) -> None:
                             "phase": item.get("phase"),
                             "message": item.get("message"),
                             "details": item.get("data"),
+                            "feed": item.get("feed"),
                         },
                     }
                 )
@@ -815,6 +949,45 @@ def _parse_json(value: Any) -> dict[str, Any] | list[dict[str, Any]] | None:
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def _sanitize_agentic_insights(insights: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(insights, dict):
+        return {}
+
+    clean = json.loads(json.dumps(insights))
+
+    def _strip_verbose(value: Any) -> Any:
+        if isinstance(value, dict):
+            blocked_keys = {"reasoning", "thought", "decision_log", "reflections", "debate_transcript"}
+            return {
+                str(k): _strip_verbose(v)
+                for k, v in value.items()
+                if str(k) not in blocked_keys
+            }
+        if isinstance(value, list):
+            return [_strip_verbose(item) for item in value]
+        return value
+
+    code_profile = clean.get("code_profile")
+    if isinstance(code_profile, dict):
+        code_profile.pop("reasoning", None)
+
+    security_reasoning = clean.get("security_reasoning")
+    if isinstance(security_reasoning, dict):
+        security_reasoning.pop("reasoning", None)
+
+    deployment_intel = clean.get("deployment_intelligence")
+    if isinstance(deployment_intel, dict):
+        deployment_intel.pop("reasoning", None)
+        deployment_intel.pop("debate_transcript", None)
+
+    meta_agent = clean.get("meta_agent")
+    if isinstance(meta_agent, dict):
+        meta_agent.pop("decision_log", None)
+        meta_agent.pop("reflections", None)
+
+    return _strip_verbose(clean)
 
 
 def _extract_entry_points(source_map: dict[str, str]) -> list[str]:
