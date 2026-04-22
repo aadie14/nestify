@@ -19,7 +19,8 @@ from app.utils.repo_parser import parse_github, parse_natural_language, parse_te
 
 router = APIRouter()
 
-ALLOWED_PROVIDERS = {"auto", "netlify", "vercel", "railway"}
+ALLOWED_PROVIDERS = {"auto", "netlify", "vercel", "railway", "gcp_cloud_run"}
+ALLOWED_DEPLOY_INTENTS = {"auto", "cloud", "local"}
 
 # In-memory progress storage for WebSocket streaming
 pipeline_progress: dict[int, list[dict]] = {}
@@ -111,6 +112,7 @@ async def upload(
     filename: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     provider: Optional[str] = Form("auto"),
+    deploy_intent: Optional[str] = Form("auto"),
     require_fix_approval: Optional[bool] = Form(False),
     agentic: Optional[bool] = Form(True),
 ):
@@ -119,6 +121,10 @@ async def upload(
     if provider not in ALLOWED_PROVIDERS:
         raise HTTPException(status_code=400, detail="Unsupported deployment provider selected.")
     preferred_provider = None if provider == "auto" else provider
+
+    intent = (deploy_intent or "auto").strip().lower()
+    if intent not in ALLOWED_DEPLOY_INTENTS:
+        raise HTTPException(status_code=400, detail="Invalid deploy_intent. Use 'auto', 'cloud', or 'local'.")
 
     parsed_input, input_type, project_name, raw_file_bytes, raw_original_name = await _parse_input(
         file, github_url, text, filename, description
@@ -133,6 +139,7 @@ async def upload(
         input_type=input_type,
         source_payload=parsed_input,
         preferred_provider=preferred_provider,
+        deploy_intent=intent,
     )
     persist_uploaded_source(
         project_id,
@@ -172,6 +179,7 @@ async def upload(
         "name": project_name,
         "input_type": input_type,
         "preferred_provider": preferred_provider,
+        "deploy_intent": intent,
         "require_fix_approval": bool(require_fix_approval),
         "agentic": True,
         "file_count": len(parsed_input.get("files", [])),

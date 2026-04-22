@@ -67,6 +67,8 @@ def init_db() -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN learning_opt_out INTEGER DEFAULT 0")
     if "security_report_pdf" not in project_columns:
         conn.execute("ALTER TABLE projects ADD COLUMN security_report_pdf TEXT")
+    if "deploy_intent" not in project_columns:
+        conn.execute("ALTER TABLE projects ADD COLUMN deploy_intent TEXT DEFAULT 'auto'")
 
     conn.commit()
     conn.close()
@@ -80,6 +82,7 @@ def create_project(
     input_type: str,
     source_payload: dict[str, Any] | None = None,
     preferred_provider: str | None = None,
+    deploy_intent: str | None = None,
 ) -> int:
     """Insert a new project and return its ID."""
     pipeline_state = json.dumps({
@@ -87,13 +90,14 @@ def create_project(
         "fix_agent": "pending",
         "deployment_agent": "pending",
     })
+    intent = str(deploy_intent or "auto").strip().lower() or "auto"
     conn = get_connection()
     cursor = conn.execute(
         """
-        INSERT INTO projects (name, input_type, source_payload, pipeline_state, preferred_provider)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO projects (name, input_type, source_payload, pipeline_state, preferred_provider, deploy_intent)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (name, input_type, json.dumps(source_payload or {}), pipeline_state, preferred_provider),
+        (name, input_type, json.dumps(source_payload or {}), pipeline_state, preferred_provider, intent),
     )
     project_id = cursor.lastrowid
     conn.commit()
@@ -124,6 +128,7 @@ def update_project(project_id: int, fields: dict[str, Any]) -> None:
         "security_report", "security_score", "fix_report",
         "deployment", "public_url", "preferred_provider",
         "pipeline_state", "agentic_insights", "learning_opt_out", "security_report_pdf",
+        "deploy_intent",
     }
     sets: list[str] = []
     values: list[Any] = []
