@@ -14,7 +14,7 @@ from app.services.project_source_service import load_source_text_map
 
 router = APIRouter()
 
-_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway"}
+_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp_cloud_run"}
 
 
 @router.post("/{project_id}")

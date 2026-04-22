@@ -69,6 +69,20 @@ class Settings:
     github_app_id: str = os.getenv("GITHUB_APP_ID", "")
     github_private_key: str = os.getenv("GITHUB_PRIVATE_KEY", "")
 
+    # ── GCP / Cloud Run ───────────────────────────────────────────────
+    gcp_enabled: bool = os.getenv("GCP_ENABLED", "false").lower() == "true"
+    gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "")
+    gcp_region: str = os.getenv("GCP_REGION", "us-central1")
+    # Base64-encoded service account JSON key (never log this value)
+    gcp_service_account_json_base64: str = os.getenv("GCP_SERVICE_ACCOUNT_JSON_BASE64", "")
+    # Cloud Run cost guardrails (demo-safe defaults)
+    gcp_cloud_run_max_instances: int = int(os.getenv("GCP_CLOUD_RUN_MAX_INSTANCES", "1"))
+    gcp_cloud_run_min_instances: int = int(os.getenv("GCP_CLOUD_RUN_MIN_INSTANCES", "0"))
+    gcp_cloud_run_memory: str = os.getenv("GCP_CLOUD_RUN_MEMORY", "512Mi")
+    gcp_cloud_run_cpu: str = os.getenv("GCP_CLOUD_RUN_CPU", "1")
+    gcp_cloud_run_concurrency: int = int(os.getenv("GCP_CLOUD_RUN_CONCURRENCY", "80"))
+    gcp_cloud_run_timeout: int = int(os.getenv("GCP_CLOUD_RUN_TIMEOUT", "60"))
+
 
 def configure_logging(level: str) -> None:
     """Set up structured logging for the application."""

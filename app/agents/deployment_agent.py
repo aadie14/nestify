@@ -31,7 +31,7 @@ from app.services.project_source_service import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway"}
+_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp_cloud_run"}
 
 
 # ─── V2 Routing Rules ────────────────────────────────────────────────────
@@ -43,10 +43,9 @@ _V2_ROUTING: dict[str, str] = {
     "backend": "railway",
     "api": "railway",
     "fullstack": "railway",
-    "docker": "railway",
-    "dockerized": "railway",
+    "docker": "gcp_cloud_run",
+    "dockerized": "gcp_cloud_run",
 }
-
 
 @dataclass(slots=True)
 class DeploymentResult:

@@ -52,6 +52,7 @@ export default function UploadPage() {
   const [copiedSample, setCopiedSample] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<any>(null);
   const [provider, setProvider] = useState('auto');
+  const [deployIntent, setDeployIntent] = useState('auto');
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   React.useEffect(() => {
@@ -100,6 +101,7 @@ export default function UploadPage() {
         body.append('file', file);
         body.append('agentic', 'true');
         body.append('provider', provider);
+        body.append('deploy_intent', deployIntent);
         res = await axios.post('/api/v1/projects/upload', body);
       } else {
         if (!githubUrl.trim()) {
@@ -110,6 +112,7 @@ export default function UploadPage() {
         res = await axios.post('/api/v1/projects/github', {
           github_url: githubUrl.trim(),
           provider,
+          deploy_intent: deployIntent,
         });
       }
 
@@ -240,6 +243,20 @@ export default function UploadPage() {
 
           <div style={{ marginTop: 14 }}>
             <div style={{ marginBottom: 10, display: 'grid', gap: 6 }}>
+              <label className="tiny" htmlFor="intent-select">Deploy mode</label>
+              <select
+                id="intent-select"
+                className="input"
+                value={deployIntent}
+                onChange={(event) => setDeployIntent(event.target.value)}
+                aria-label="Deploy mode"
+              >
+                <option value="auto">Auto (best-fit provider)</option>
+                <option value="cloud">Cloud (prefer GCP Cloud Run → Railway)</option>
+                <option value="local">Local Preview only</option>
+              </select>
+            </div>
+            <div style={{ marginBottom: 10, display: 'grid', gap: 6 }}>
               <label className="tiny" htmlFor="provider-select">Deployment provider</label>
               <select
                 id="provider-select"
@@ -249,9 +266,10 @@ export default function UploadPage() {
                 aria-label="Preferred deployment provider"
               >
                 <option value="auto">Auto-select best provider</option>
+                <option value="gcp_cloud_run">Google Cloud Run</option>
+                <option value="railway">Railway</option>
                 <option value="vercel">Vercel</option>
                 <option value="netlify">Netlify</option>
-                <option value="railway">Railway</option>
                 <option value="local">Local Preview</option>
               </select>
               {readiness?.messages?.length ? (
@@ -332,6 +350,7 @@ export default function UploadPage() {
               <>
                 <div className="tiny">Static: {readiness.static_ready ? 'Ready' : 'Needs VERCEL_TOKEN or NETLIFY_API_TOKEN'}</div>
                 <div className="tiny">Backend: {readiness.backend_ready ? 'Ready' : 'Needs RAILWAY_API_KEY'}</div>
+                <div className="tiny">Cloud Run: {readiness.gcp_ready ? 'Ready' : 'Needs GCP_PROJECT_ID + GCP_SERVICE_ACCOUNT_JSON_BASE64'}</div>
                 <div className="tiny">GitHub import: {readiness.github_ready ? 'Ready' : 'Set GITHUB_TOKEN to avoid API limits'}</div>
                 {Array.isArray(readiness.messages) && readiness.messages.length ? (
                   <ul className="tiny" style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>

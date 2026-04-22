@@ -96,6 +96,10 @@ def _credentials_snapshot() -> dict[str, bool]:
         "railway": bool(os.getenv("RAILWAY_API_KEY", "").strip()),
         "github": bool((settings.github_token or os.getenv("GITHUB_TOKEN", "")).strip()),
         "railway_workspace": bool(os.getenv("RAILWAY_WORKSPACE_ID", "").strip()),
+        "gcp_cloud_run": bool(
+            (settings.gcp_service_account_json_base64 or os.getenv("GCP_SERVICE_ACCOUNT_JSON_BASE64", "")).strip()
+            and (settings.gcp_project_id or os.getenv("GCP_PROJECT_ID", "")).strip()
+        ),
     }
 
 
@@ -107,7 +111,9 @@ def _estimate_success_probability(app_kind: str, provider_candidates: list[str],
         if creds.get("vercel") or creds.get("netlify"):
             score += 0.2
     else:
-        if creds.get("railway"):
+        if creds.get("gcp_cloud_run"):
+            score += 0.25
+        elif creds.get("railway"):
             score += 0.2
         if github_url or creds.get("github"):
             score += 0.14
@@ -116,18 +122,121 @@ def _estimate_success_probability(app_kind: str, provider_candidates: list[str],
     return max(0.05, min(0.98, score))
 
 
+def _project_has_dockerfile(project_id: int) -> bool:
+    """Return True if the project source contains a Dockerfile."""
+    from app.services.project_source_service import load_source_file_map
+    file_map = load_source_file_map(project_id)
+    return any(
+        os.path.basename(p).lower() in ("dockerfile", "dockerfile.prod", "dockerfile.production")
+        for p in file_map
+    )
+
+
+# ─── Cloud Run cost guardrails ──────────────────────────────────
+
+_CLOUD_RUN_BACKEND_APP_KINDS = {"backend", "api", "fullstack", "docker", "dockerized"}
+
+
+def select_provider_with_intent(
+    *,
+    deploy_intent: str,
+    app_kind: str,
+    preferred_provider: str | None,
+    creds: dict[str, bool],
+    has_dockerfile: bool,
+    debate_recommendation: str | None = None,
+) -> tuple[str, str]:
+    """Deterministic provider selection based on deploy_intent, app kind, and credentials.
+
+    Returns (provider_name, selection_reason). Provider may be "none" when no
+    suitable provider is available — callers must handle that case.
+    """
+    intent = str(deploy_intent or "auto").strip().lower()
+    is_cloud_run_capable = app_kind in _CLOUD_RUN_BACKEND_APP_KINDS
+
+    if intent == "local":
+        return "local", "deploy_intent=local: skipping all cloud providers, serving local preview."
+
+    if intent == "cloud":
+        if app_kind == "static":
+            if creds.get("vercel"):
+                return "vercel", "deploy_intent=cloud: Vercel selected for static deployment."
+            if creds.get("netlify"):
+                return "netlify", "deploy_intent=cloud: Netlify selected for static deployment."
+            return "none", "deploy_intent=cloud: No static cloud provider configured (VERCEL_TOKEN or NETLIFY_API_TOKEN required)."
+
+        # Backend / docker / fullstack — prefer Cloud Run
+        if creds.get("gcp_cloud_run"):
+            if has_dockerfile:
+                return (
+                    "gcp_cloud_run",
+                    "deploy_intent=cloud: GCP Cloud Run selected — credentials present and Dockerfile found.",
+                )
+            # GCP ready but no Dockerfile — try Railway as fallback
+            if creds.get("railway"):
+                return (
+                    "railway",
+                    "deploy_intent=cloud: GCP Cloud Run ready but no Dockerfile found; falling back to Railway.",
+                )
+            return (
+                "none",
+                "deploy_intent=cloud: GCP Cloud Run requires a Dockerfile; no Railway fallback configured.",
+            )
+        # GCP not configured — try Railway
+        if creds.get("railway"):
+            return "railway", "deploy_intent=cloud: GCP credentials not configured; falling back to Railway."
+        return "none", "deploy_intent=cloud: No cloud backend provider configured (GCP_PROJECT_ID + GCP_SERVICE_ACCOUNT_JSON_BASE64 or RAILWAY_API_KEY required)."
+
+    # intent == "auto": deterministic routing with Cloud Run as candidate
+    pref = str(preferred_provider or "").strip().lower() or None
+
+    # Honour explicit user preference when credentials are available
+    if pref == "gcp_cloud_run" and creds.get("gcp_cloud_run") and has_dockerfile:
+        return "gcp_cloud_run", "Explicit provider preference gcp_cloud_run satisfied."
+    if pref and pref not in {"gcp_cloud_run"} and creds.get(pref):
+        return pref, f"Explicit provider preference {pref} satisfied."
+
+    # Use agent debate recommendation if verified
+    if debate_recommendation:
+        rec = str(debate_recommendation).strip().lower()
+        if rec == "gcp_cloud_run" and creds.get("gcp_cloud_run") and has_dockerfile:
+            return "gcp_cloud_run", "Agent debate recommended gcp_cloud_run with verified credentials."
+        if rec not in {"gcp_cloud_run"} and creds.get(rec):
+            return rec, f"Agent debate recommended {rec} with verified credentials."
+
+    # Default routing table
+    if app_kind == "static":
+        if creds.get("vercel"):
+            return "vercel", "Auto-selected Vercel for static deployment."
+        if creds.get("netlify"):
+            return "netlify", "Auto-selected Netlify for static deployment."
+    else:
+        if is_cloud_run_capable and creds.get("gcp_cloud_run") and has_dockerfile:
+            return "gcp_cloud_run", "Auto-selected GCP Cloud Run for backend/docker deployment."
+        if creds.get("railway"):
+            return "railway", "Auto-selected Railway for backend deployment."
+
+    return "none", "No suitable deployment provider found."
+
+
 def validate_pre_deployment(
     *,
     app_kind: str,
     preferred_provider: str | None,
     github_url: str | None,
+    deploy_intent: str = "auto",
+    has_dockerfile: bool = False,
 ) -> dict[str, Any]:
     """Validate deployment prerequisites before contacting any provider API."""
     creds = _credentials_snapshot()
     preferred = str(preferred_provider or "").strip().lower() or None
 
     static_candidates = [p for p in ["vercel", "netlify"] if creds.get(p)]
-    backend_candidates = ["railway"] if creds.get("railway") else []
+    backend_candidates: list[str] = []
+    if creds.get("gcp_cloud_run") and has_dockerfile:
+        backend_candidates.append("gcp_cloud_run")
+    if creds.get("railway"):
+        backend_candidates.append("railway")
     candidates = static_candidates if app_kind == "static" else backend_candidates
 
     if preferred and preferred in candidates:
@@ -135,17 +244,46 @@ def validate_pre_deployment(
 
     probability = _estimate_success_probability(app_kind, candidates, creds, github_url)
 
-    if not candidates:
-        reason = (
-            "No static deployment credentials were found."
-            if app_kind == "static"
-            else "No backend deployment credentials were found."
-        )
-        fix = (
-            "Connect Vercel or Netlify credentials to enable public static deployment."
-            if app_kind == "static"
-            else "Connect Railway credentials to enable public backend deployment."
-        )
+    # Run intent-aware deterministic provider selection
+    selected_provider, selection_reason = select_provider_with_intent(
+        deploy_intent=deploy_intent,
+        app_kind=app_kind,
+        preferred_provider=preferred,
+        creds=creds,
+        has_dockerfile=has_dockerfile,
+    )
+
+    if selected_provider == "none" or not candidates:
+        if app_kind == "static":
+            reason = "No static deployment credentials were found."
+            fix = "Connect Vercel or Netlify credentials to enable public static deployment."
+        else:
+            reason = str(selection_reason)
+            if creds.get("gcp_cloud_run") and not has_dockerfile:
+                fix = "Add a Dockerfile to your project or configure RAILWAY_API_KEY as a fallback backend provider."
+            else:
+                fix = (
+                    "Configure GCP_PROJECT_ID + GCP_SERVICE_ACCOUNT_JSON_BASE64 for Cloud Run, "
+                    "or RAILWAY_API_KEY for Railway."
+                )
+        options = [
+            {
+                "option": "connect_provider",
+                "label": "Connect provider credentials",
+                "description": (
+                    "Add VERCEL_TOKEN / NETLIFY_API_TOKEN for static apps, "
+                    "or GCP_PROJECT_ID + GCP_SERVICE_ACCOUNT_JSON_BASE64 / RAILWAY_API_KEY for backend apps."
+                ),
+            },
+            {
+                "option": "auto_publish_github_then_deploy",
+                "label": "Enable autonomous source publishing",
+                "description": (
+                    "Set GITHUB_TOKEN so Nestify can auto-create a temporary GitHub repository "
+                    "and deploy once provider credentials are configured."
+                ),
+            },
+        ]
         return {
             "ok": False,
             "action": NEEDS_CREDENTIALS_ACTION,
@@ -153,29 +291,21 @@ def validate_pre_deployment(
             "reason": reason,
             "fix_suggestion": fix,
             "next_action": "Connect a provider and retry deployment.",
-            "options": [
-                {
-                    "option": "connect_provider",
-                    "label": "Connect provider credentials",
-                    "description": "Add VERCEL_TOKEN / NETLIFY_API_TOKEN for static apps, or RAILWAY_API_KEY for backend apps.",
-                },
-                {
-                    "option": "auto_publish_github_then_deploy",
-                    "label": "Enable autonomous source publishing",
-                    "description": "Set GITHUB_TOKEN so Nestify can auto-create a temporary GitHub repository and deploy once provider credentials are configured.",
-                },
-            ],
+            "options": options,
             "credentials": creds,
             "provider_candidates": candidates,
             "success_probability": probability,
+            "selection_reason": selection_reason,
         }
 
-    if app_kind == "backend" and not github_url and not creds.get("github"):
+    # Backend apps using Railway or Cloud Run still need a source URL
+    # (Cloud Run builds from the local source dir; Railway needs GitHub)
+    if app_kind != "static" and selected_provider == "railway" and not github_url and not creds.get("github"):
         return {
             "ok": False,
             "action": NEEDS_CREDENTIALS_ACTION,
             "action_legacy": NEEDS_CREDENTIALS_ACTION_LEGACY,
-            "reason": "Backend deployment needs a repository source. No GitHub URL or GITHUB_TOKEN is configured.",
+            "reason": "Railway deployment needs a repository source. No GitHub URL or GITHUB_TOKEN is configured.",
             "fix_suggestion": "Provide a GitHub repository URL or configure GITHUB_TOKEN for automatic temporary repository publishing.",
             "next_action": "Add github_url or GITHUB_TOKEN, then retry deployment.",
             "options": [
@@ -193,15 +323,20 @@ def validate_pre_deployment(
             "credentials": creds,
             "provider_candidates": candidates,
             "success_probability": probability,
+            "selection_reason": selection_reason,
         }
 
-    selected = candidates[0]
+    # Ensure selected_provider is the head of candidates
+    if selected_provider in candidates:
+        candidates = [selected_provider] + [p for p in candidates if p != selected_provider]
+
     return {
         "ok": True,
-        "provider": selected,
+        "provider": selected_provider,
         "provider_candidates": candidates,
         "credentials": creds,
         "success_probability": probability,
+        "selection_reason": selection_reason,
     }
 
 
@@ -851,6 +986,231 @@ async def deploy_backend_to_render(
     }
 
 
+# ─── GCP Cloud Run ───────────────────────────────────────────────
+
+
+async def _run_gcloud_cmd(
+    args: list[str],
+    project_id: int,
+    *,
+    timeout: int = 300,
+    capture_output: bool = False,
+) -> str:
+    """Run a gcloud/docker CLI command asynchronously.
+
+    Returns stdout as a stripped string. Raises RuntimeError on non-zero exit.
+    Never logs the service-account key file path or its content.
+    """
+    import asyncio
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(f"Command '{args[0]}' timed out after {timeout}s.")
+
+    stdout = (stdout_b or b"").decode("utf-8", errors="replace").strip()
+    stderr = (stderr_b or b"").decode("utf-8", errors="replace").strip()
+
+    if proc.returncode != 0:
+        # Redact any file paths that look like they could contain credentials
+        safe_stderr = re.sub(r"/tmp/[^\s]+", "<redacted-tmp-path>", stderr)
+        raise RuntimeError(f"Command '{args[0]}' failed (exit {proc.returncode}): {safe_stderr[:400]}")
+
+    if stdout:
+        add_log(project_id, "deployment_agent", f"[gcloud] {args[0]} completed.", "info")
+
+    return stdout
+
+
+async def deploy_backend_to_gcp_cloud_run(
+    project_id: int,
+    project_name: str,
+    github_url: str | None,
+    env_template: str,
+) -> dict[str, Any]:
+    """Deploy a backend app to GCP Cloud Run using the gcloud CLI.
+
+    Cost guardrails (demo-safe defaults):
+      - max-instances: 1   (override via GCP_CLOUD_RUN_MAX_INSTANCES)
+      - min-instances: 0   (scale-to-zero)
+      - memory:        512Mi
+      - cpu:           1
+      - concurrency:   80
+      - timeout:       60s
+
+    Requires:
+      - GCP_PROJECT_ID
+      - GCP_SERVICE_ACCOUNT_JSON_BASE64  (base64-encoded SA key JSON, never logged)
+      - gcloud CLI installed and on PATH
+      - docker CLI installed and on PATH
+    """
+    import asyncio
+    import base64
+    import tempfile
+
+    sa_json_b64 = (
+        settings.gcp_service_account_json_base64
+        or os.getenv("GCP_SERVICE_ACCOUNT_JSON_BASE64", "")
+    ).strip()
+    gcp_project = (settings.gcp_project_id or os.getenv("GCP_PROJECT_ID", "")).strip()
+    gcp_region = (settings.gcp_region or os.getenv("GCP_REGION", "us-central1")).strip()
+
+    if not sa_json_b64 or not gcp_project:
+        raise RuntimeError(
+            "GCP_PROJECT_ID and GCP_SERVICE_ACCOUNT_JSON_BASE64 must be configured for Cloud Run deployment."
+        )
+
+    # Validate guardrail settings (clamp to demo-safe maximums)
+    max_instances = max(1, min(settings.gcp_cloud_run_max_instances, 5))
+    min_instances = max(0, min(settings.gcp_cloud_run_min_instances, 1))
+    memory = settings.gcp_cloud_run_memory or "512Mi"
+    cpu = settings.gcp_cloud_run_cpu or "1"
+    concurrency = max(1, min(settings.gcp_cloud_run_concurrency, 200))
+    timeout_sec = max(10, min(settings.gcp_cloud_run_timeout, 60))
+
+    service_name = _sanitize_project_name(project_name)
+    image = f"gcr.io/{gcp_project}/{service_name}:latest"
+    source_dir = str(get_project_source_dir(project_id))
+
+    add_log(
+        project_id, "deployment_agent",
+        f"[Cloud Run] Starting deploy: service={service_name}, region={gcp_region}, project={gcp_project}",
+        "info",
+    )
+    add_log(
+        project_id, "deployment_agent",
+        f"[Cloud Run] Cost guardrails: max_instances={max_instances}, min_instances={min_instances}, "
+        f"memory={memory}, cpu={cpu}, timeout={timeout_sec}s",
+        "info",
+    )
+
+    # Write service-account key to a temporary file (cleaned up in finally)
+    sa_key_path: str | None = None
+    try:
+        try:
+            sa_json_bytes = base64.b64decode(sa_json_b64)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to decode GCP_SERVICE_ACCOUNT_JSON_BASE64: {exc}") from exc
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".json", delete=False, dir="/tmp"
+        ) as sa_file:
+            sa_file.write(sa_json_bytes)
+            sa_key_path = sa_file.name
+
+        # --- Authenticate ---
+        add_log(project_id, "deployment_agent", "[Cloud Run] Activating GCP service account.", "info")
+        await _run_gcloud_cmd(
+            ["gcloud", "auth", "activate-service-account", "--key-file", sa_key_path],
+            project_id, timeout=60,
+        )
+        await _run_gcloud_cmd(
+            ["gcloud", "config", "set", "project", gcp_project],
+            project_id, timeout=30,
+        )
+        await _run_gcloud_cmd(
+            ["gcloud", "auth", "configure-docker", "--quiet"],
+            project_id, timeout=60,
+        )
+
+        # --- Build image from project source ---
+        add_log(project_id, "deployment_agent", f"[Cloud Run] Building Docker image: {image}", "info")
+        await _run_gcloud_cmd(
+            ["docker", "build", "-t", image, source_dir],
+            project_id, timeout=300,
+        )
+
+        # --- Push image ---
+        add_log(project_id, "deployment_agent", f"[Cloud Run] Pushing image to GCR: {image}", "info")
+        await _run_gcloud_cmd(
+            ["docker", "push", image],
+            project_id, timeout=300,
+        )
+
+        # --- Deploy to Cloud Run ---
+        env_vars = _parse_env_template(env_template)
+        deploy_cmd = [
+            "gcloud", "run", "deploy", service_name,
+            "--image", image,
+            "--platform", "managed",
+            "--region", gcp_region,
+            "--allow-unauthenticated",
+            f"--max-instances={max_instances}",
+            f"--min-instances={min_instances}",
+            f"--memory={memory}",
+            f"--cpu={cpu}",
+            f"--concurrency={concurrency}",
+            f"--timeout={timeout_sec}s",
+            "--quiet",
+        ]
+        if env_vars:
+            env_str = ",".join(f"{k}={v}" for k, v in env_vars.items())
+            deploy_cmd += ["--set-env-vars", env_str]
+
+        add_log(project_id, "deployment_agent", "[Cloud Run] Deploying service to Cloud Run.", "info")
+        await _run_gcloud_cmd(deploy_cmd, project_id, timeout=300)
+
+        # --- Get service URL ---
+        service_url = await _run_gcloud_cmd(
+            [
+                "gcloud", "run", "services", "describe", service_name,
+                "--platform", "managed",
+                "--region", gcp_region,
+                "--format", "value(status.url)",
+            ],
+            project_id, timeout=60,
+        )
+        deployment_url = _normalize_public_url(service_url)
+
+    finally:
+        # Always clean up the service account key file
+        if sa_key_path:
+            try:
+                os.unlink(sa_key_path)
+            except OSError:
+                pass
+
+    add_log(
+        project_id, "deployment_agent",
+        f"[Cloud Run] Deployment successful: {deployment_url}",
+        "info",
+    )
+
+    return {
+        "provider": "gcp_cloud_run",
+        "deployment_url": deployment_url,
+        "status": "success",
+        "details": {
+            "service_name": service_name,
+            "region": gcp_region,
+            "gcp_project": gcp_project,
+            "image": image,
+            "guardrails": {
+                "max_instances": max_instances,
+                "min_instances": min_instances,
+                "memory": memory,
+                "cpu": cpu,
+                "concurrency": concurrency,
+                "timeout_seconds": timeout_sec,
+            },
+            "logs_url": (
+                f"https://console.cloud.google.com/run/detail/{gcp_region}/"
+                f"{service_name}/logs?project={gcp_project}"
+            ),
+            "console_url": (
+                f"https://console.cloud.google.com/run/detail/{gcp_region}/"
+                f"{service_name}?project={gcp_project}"
+            ),
+        },
+    }
+
+
 async def _publish_source_to_temporary_github_repo(project_id: int, project_name: str) -> str:
     """Publish persisted source files to a temporary private GitHub repository.
 
@@ -963,10 +1323,16 @@ async def execute_deployment(
     stack_info = _parse_stack_info(project_row)
     framework = str(stack_info.get("framework") or app_kind or "unknown").lower()
 
+    # Read deploy_intent from the project record (stored during upload)
+    deploy_intent = str((project_row or {}).get("deploy_intent") or "auto").strip().lower() or "auto"
+    has_dockerfile = _project_has_dockerfile(project_id)
+
     preflight = validate_pre_deployment(
         app_kind=app_kind,
         preferred_provider=preferred_provider,
         github_url=github_url,
+        deploy_intent=deploy_intent,
+        has_dockerfile=has_dockerfile,
     )
     provider_candidates = [
         str(item).strip().lower()
@@ -988,12 +1354,14 @@ async def execute_deployment(
             "info",
         )
 
+    selection_reason = str(preflight.get("selection_reason") or "")
     add_log(
         project_id,
         "deployment_agent",
         (
-            f"Pre-deployment validation completed. "
+            f"Pre-deployment validation completed (intent={deploy_intent}). "
             f"Estimated success probability: {round(success_probability * 100)}%."
+            + (f" Selection: {selection_reason}" if selection_reason else "")
         ),
         "info",
     )
@@ -1017,6 +1385,8 @@ async def execute_deployment(
                 "options": preflight.get("options") or [],
                 "provider_candidates": preflight.get("provider_candidates") or [],
                 "validation": "pre_deployment",
+                "deploy_intent": deploy_intent,
+                "selection_reason": selection_reason,
             },
         )
         add_log(
@@ -1045,7 +1415,8 @@ async def execute_deployment(
 
     provider = str(preflight.get("provider") or choose_provider(app_kind, preferred_provider))
     learned_provider = str(strategy.get("preferred_provider") or "").strip().lower()
-    if learned_provider and learned_provider in provider_candidates:
+    # Only apply learned provider if it is not overriding an explicit cloud intent
+    if learned_provider and learned_provider in provider_candidates and deploy_intent == "auto":
         provider = learned_provider
         add_log(
             project_id,
@@ -1133,7 +1504,8 @@ async def execute_deployment(
                 extra={"provider_attempts": errors},
             )
     else:
-        if not github_url:
+        # Cloud Run does not need a GitHub URL — it builds from local source
+        if provider != "gcp_cloud_run" and not github_url:
             add_log(
                 project_id,
                 "deployment_agent",
@@ -1171,15 +1543,38 @@ async def execute_deployment(
                 except Exception as learn_error:
                     add_log(project_id, "deployment_agent", f"Learning record skipped: {learn_error}", "warn")
                 return result
+
+        # Backend provider dispatch — try primary provider, fall back within backend set
+        backend_providers_to_try = [provider] + [
+            c for c in provider_candidates if c != provider and c in {"railway", "gcp_cloud_run"}
+        ]
         add_log(project_id, "deployment_agent", f"Deploying backend app via {provider}", "info")
-        try:
-            if provider == "railway":
-                result = await deploy_backend_to_railway(project_id, project_name, github_url, env_template)
-            else:
-                raise RuntimeError(f"Unsupported backend provider: {provider}. Supported backend provider: railway")
-        except Exception as exc:
-            reason = f"Backend deployment failed on {provider}: {exc}"
-            error_signatures.append(_normalize_error_signature(reason))
+        result = None
+        backend_errors: list[str] = []
+        for backend_provider in backend_providers_to_try:
+            try:
+                if backend_provider == "railway":
+                    if not github_url:
+                        raise RuntimeError("Railway requires a GitHub repository URL or GITHUB_TOKEN.")
+                    result = await deploy_backend_to_railway(project_id, project_name, github_url, env_template)
+                elif backend_provider == "gcp_cloud_run":
+                    result = await deploy_backend_to_gcp_cloud_run(project_id, project_name, github_url, env_template)
+                else:
+                    raise RuntimeError(f"Unsupported backend provider: {backend_provider}")
+                break
+            except Exception as exc:
+                err_text = str(exc)
+                backend_errors.append(f"{backend_provider}: {err_text}")
+                error_signatures.append(_normalize_error_signature(err_text))
+                add_log(
+                    project_id,
+                    "deployment_agent",
+                    f"Backend deploy failed ({backend_provider}): {err_text}",
+                    "warn",
+                )
+
+        if not result:
+            reason = f"Backend deployment failed on all attempted providers: {'; '.join(backend_errors)}"
             result = _failure_payload(
                 provider=provider,
                 app_kind=app_kind,
@@ -1187,6 +1582,7 @@ async def execute_deployment(
                 fix_suggestion="Verify provider credentials, workspace settings, and runtime configuration.",
                 next_action="Apply the suggested configuration fix and retry deployment.",
                 success_probability=success_probability,
+                extra={"provider_attempts": backend_errors},
             )
 
     # Update project with deployment info

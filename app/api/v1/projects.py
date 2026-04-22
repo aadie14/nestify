@@ -123,23 +123,35 @@ async def get_deployment_readiness() -> dict[str, Any]:
     has_netlify = bool(os.getenv("NETLIFY_API_TOKEN", "").strip())
     has_railway = bool(os.getenv("RAILWAY_API_KEY", "").strip())
     has_github = bool(os.getenv("GITHUB_TOKEN", "").strip())
+    has_gcp = bool(
+        os.getenv("GCP_SERVICE_ACCOUNT_JSON_BASE64", "").strip()
+        and os.getenv("GCP_PROJECT_ID", "").strip()
+    )
 
     static_ready = has_vercel or has_netlify
-    backend_ready = has_railway
+    backend_ready = has_railway or has_gcp
     static_probability = 0.85 if static_ready else 0.12
-    backend_probability = 0.88 if (backend_ready and has_github) else (0.55 if backend_ready else 0.08)
+    backend_probability = (
+        0.92 if (has_gcp and has_github)
+        else 0.88 if (backend_ready and has_github)
+        else 0.55 if backend_ready
+        else 0.08
+    )
 
     messages: list[str] = []
     if not static_ready:
         messages.append("Static apps will use local preview URLs unless VERCEL_TOKEN or NETLIFY_API_TOKEN is configured.")
-    if not backend_ready:
-        messages.append("Backend apps need RAILWAY_API_KEY for public live URLs.")
+    if not has_railway and not has_gcp:
+        messages.append("Backend apps need RAILWAY_API_KEY or GCP credentials for public live URLs.")
+    elif not has_gcp:
+        messages.append("Add GCP_PROJECT_ID + GCP_SERVICE_ACCOUNT_JSON_BASE64 to enable Cloud Run deployments.")
     if not has_github:
         messages.append("Set GITHUB_TOKEN to improve GitHub import reliability and avoid API limits.")
 
     return {
         "static_ready": static_ready,
         "backend_ready": backend_ready,
+        "gcp_ready": has_gcp,
         "github_ready": has_github,
         "estimated_success_probability": {
             "static": static_probability,
@@ -149,6 +161,7 @@ async def get_deployment_readiness() -> dict[str, Any]:
             "vercel": has_vercel,
             "netlify": has_netlify,
             "railway": has_railway,
+            "gcp_cloud_run": has_gcp,
         },
         "messages": messages,
     }
