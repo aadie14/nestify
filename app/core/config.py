@@ -50,6 +50,11 @@ class Settings:
     netlify_api_token: str = os.getenv("NETLIFY_API_TOKEN", "")
     render_api_key: str = os.getenv("RENDER_API_KEY", "")
     railway_api_key: str = os.getenv("RAILWAY_API_KEY", "")
+    gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "")
+    gcp_service_account_json: str = os.getenv("GCP_SERVICE_ACCOUNT_JSON", "")
+    gcp_artifact_repository: str = os.getenv("GCP_ARTIFACT_REPOSITORY", "nestify")
+    gcp_region: str = os.getenv("GCP_REGION", "us-central1")
+    gcp_free_tier_guard: bool = os.getenv("GCP_FREE_TIER_GUARD", "true").lower() == "true"
 
     # ── Neo4j (Graph Database) ────────────────────────────────────────
     neo4j_uri: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")

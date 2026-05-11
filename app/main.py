@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -20,12 +20,14 @@ from app.database import init_db
 from app.routes import deploy, fix, scan, status, upload
 from app.api.v1 import (
     agentic_routes as agentic_api,
+    gcp_setup as gcp_api,
     graph as graph_api,
     learning as learning_api,
     metrics as metrics_api,
     optimization as optimization_api,
     projects as projects_api,
     risk as risk_api,
+    secrets as secrets_api,
     webhook as webhook_api,
 )
 from app.services.project_source_service import get_project_source_dir
@@ -95,8 +97,10 @@ app.include_router(learning_api.router, prefix="/api/v1/learning", tags=["Learni
 app.include_router(optimization_api.router, prefix="/api/v1/optimization", tags=["Optimization"])
 app.include_router(agentic_api.router, prefix="/api/v1/agentic", tags=["Agentic"])
 app.include_router(projects_api.router, prefix="/api/v1/projects", tags=["Projects"])
+app.include_router(secrets_api.router, prefix="/api/v1", tags=["Secrets"])
 app.include_router(metrics_api.router, prefix="/api/v1", tags=["Metrics"])
 app.include_router(webhook_api.router, prefix="/api/v1/webhook", tags=["Webhooks"])
+app.include_router(gcp_api.router, prefix="/api/v1/gcp", tags=["GCP Setup"])
 
 # Compatibility aliases for simplified endpoints.
 app.include_router(graph_api.router, prefix="/graph", tags=["Graph Intelligence"])
@@ -149,6 +153,7 @@ async def health_check():
             "postgres": postgres_status,
             "llm": "configured" if settings.anthropic_api_key or settings.groq_api_key or settings.gemini_api_key else "not configured",
             "github": "configured" if settings.github_token else "not configured",
+            "fly": "configured" if os.getenv("FLY_API_TOKEN", "").strip() else "not configured",
         },
     }
 

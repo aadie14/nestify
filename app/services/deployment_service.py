@@ -14,6 +14,9 @@ import logging
 import os
 import re
 import secrets
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,7 @@ import httpx
 
 from app.core.config import settings
 from app.database import add_deployment_outcome, add_log, get_project, list_deployment_outcomes, update_project
+from app.services.providers import GCPDeploymentProvider
 from app.services.project_source_service import get_project_source_dir
 from app.services.project_source_service import load_source_file_map
 from app.services.project_source_service import ensure_preview_index, get_local_preview_url
@@ -72,6 +76,10 @@ def choose_provider(app_kind: str, preferred_provider: str | None) -> str:
         static_order.append("netlify")
 
     backend_order: list[str] = []
+    if os.getenv("FLY_API_TOKEN"):
+        backend_order.append("fly")
+    if _gcp_credentials_ready():
+        backend_order.append("gcp")
     if os.getenv("RAILWAY_API_KEY"):
         backend_order.append("railway")
 
@@ -84,7 +92,7 @@ def choose_provider(app_kind: str, preferred_provider: str | None) -> str:
                 "No static deployment provider token found. Configure VERCEL_TOKEN or NETLIFY_API_TOKEN for a public live URL."
             )
         raise RuntimeError(
-            "No backend deployment provider token found. Configure RAILWAY_API_KEY for a public live URL."
+            "No backend deployment provider token found. Configure FLY_API_TOKEN, RAILWAY_API_KEY, or GCP credentials for a public live URL."
         )
     return supported[0]
 
@@ -93,10 +101,19 @@ def _credentials_snapshot() -> dict[str, bool]:
     return {
         "vercel": bool(os.getenv("VERCEL_TOKEN", "").strip()),
         "netlify": bool(os.getenv("NETLIFY_API_TOKEN", "").strip()),
+        "fly": bool(os.getenv("FLY_API_TOKEN", "").strip()),
         "railway": bool(os.getenv("RAILWAY_API_KEY", "").strip()),
+        "gcp": _gcp_credentials_ready(),
         "github": bool((settings.github_token or os.getenv("GITHUB_TOKEN", "")).strip()),
         "railway_workspace": bool(os.getenv("RAILWAY_WORKSPACE_ID", "").strip()),
     }
+
+
+def _gcp_credentials_ready() -> bool:
+    project_id = os.getenv("GCP_PROJECT_ID", "").strip()
+    service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+    adc_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    return bool(service_account_json) or bool(adc_path) or bool(project_id)
 
 
 def _estimate_success_probability(app_kind: str, provider_candidates: list[str], creds: dict[str, bool], github_url: str | None) -> float:
@@ -107,13 +124,206 @@ def _estimate_success_probability(app_kind: str, provider_candidates: list[str],
         if creds.get("vercel") or creds.get("netlify"):
             score += 0.2
     else:
-        if creds.get("railway"):
+        if creds.get("gcp"):
             score += 0.2
+        if creds.get("railway"):
+            score += 0.14
         if github_url or creds.get("github"):
             score += 0.14
         if creds.get("railway_workspace"):
             score += 0.08
     return max(0.05, min(0.98, score))
+
+
+def _graphql_fly_request(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Send a Fly GraphQL request using the configured token."""
+    token = os.getenv("FLY_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("FLY_API_TOKEN not set")
+    response = httpx.post(
+        "https://api.fly.io/graphql",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"query": query, "variables": variables or {}},
+        timeout=60,
+    )
+    payload = response.json() if response.content else {}
+    if response.status_code >= 400 or payload.get("errors"):
+        error_text = response.text[:500]
+        if payload.get("errors"):
+            error_text = payload["errors"][0].get("message", error_text)
+        raise RuntimeError(f"Fly GraphQL error: {error_text}")
+    return payload.get("data") or {}
+
+
+def _fly_personal_organization() -> dict[str, Any]:
+    """Return the active personal organization details for the Fly token owner."""
+    data = _graphql_fly_request("query { personalOrganization { id slug name } }")
+    org = data.get("personalOrganization") or {}
+    if org.get("id") and org.get("slug"):
+        return org
+
+    data = _graphql_fly_request("query { organizations(first: 1, admin: true) { edges { node { id slug name } } } }")
+    edges = ((data.get("organizations") or {}).get("edges") or [])
+    if edges:
+        return edges[0].get("node") or {}
+    raise RuntimeError("Unable to determine a Fly organization for app creation")
+
+
+def _fly_find_or_create_app(app_name: str) -> dict[str, Any]:
+    """Find a Fly app by name or create it if it doesn't exist."""
+    query = "query($name: String!) { app(name: $name) { id name appUrl allocations { nodes { ip type region } } } }"
+    data = _graphql_fly_request(query, {"name": app_name})
+    app = data.get("app")
+    if app and app.get("id"):
+        return app
+
+    org = _fly_personal_organization()
+    create_data = _graphql_fly_request(
+        """
+        mutation($input: CreateAppInput!) {
+          createApp(input: $input) {
+            app { id name appUrl allocations { nodes { ip type region } } }
+          }
+        }
+        """,
+        {
+            "input": {
+                "name": app_name,
+                "organizationId": org["id"],
+                "machines": True,
+                "enableSubdomains": True,
+            }
+        },
+    )
+    created = ((create_data.get("createApp") or {}).get("app") or {})
+    if not created.get("id"):
+        raise RuntimeError("Fly app creation did not return an app id")
+    return created
+
+
+def _fly_allocate_ip(app_id: str, ip_type: str) -> dict[str, Any] | None:
+    """Allocate a Fly public IP if the app does not already have one of this type."""
+    app_data = _graphql_fly_request(
+        "query($id: ID!) { app(id: $id) { id allocations { nodes { ip type region } } } }",
+        {"id": app_id},
+    ).get("app") or {}
+    current_ips = app_data.get("allocations") or {}
+    nodes = current_ips.get("nodes") or []
+    if any(str(node.get("type") or "").lower() == ip_type.lower() for node in nodes):
+        return None
+
+    allocate_data = _graphql_fly_request(
+        """
+        mutation($input: AllocateIPAddressInput!) {
+          allocateIpAddress(input: $input) {
+            ipAddress { id address type region }
+          }
+        }
+        """,
+        {
+            "input": {
+                "appId": app_id,
+                "type": ip_type,
+            }
+        },
+    )
+    return ((allocate_data.get("allocateIpAddress") or {}).get("ipAddress") or None)
+
+
+def _copy_source_to_temp_dir(project_id: int) -> Path:
+    """Copy persisted project source to a temp build directory for Docker."""
+    source_dir = Path(get_project_source_dir(project_id)) / "source"
+    if not source_dir.exists():
+        raise RuntimeError("No persisted source directory found for Fly build")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"nestify-fly-{project_id}-"))
+    for path in source_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(source_dir)
+        if any(part in {".git", "node_modules", "dist", "build", "__pycache__", ".venv", "venv", "env"} for part in rel.parts):
+            continue
+        target = temp_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    return temp_dir
+
+
+def _build_fly_dockerfile(build_dir: Path, project_name: str, stack_info: dict[str, Any]) -> Path:
+    """Create a temporary Dockerfile suitable for a backend Fly deployment."""
+    runtime = str(stack_info.get("runtime") or "").lower()
+    if runtime == "node" or (build_dir / "package.json").exists():
+        dockerfile = f"""
+FROM node:20-slim
+WORKDIR /app
+ENV NODE_ENV=production PORT=8080
+COPY package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
+COPY . .
+EXPOSE 8080
+CMD ["npm", "start"]
+"""
+    else:
+        requirements = build_dir / "requirements.txt"
+        if not requirements.exists() and (build_dir / "pyproject.toml").exists():
+            dockerfile = f"""
+FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN pip install --no-cache-dir uvicorn fastapi
+RUN pip install --no-cache-dir .
+EXPOSE 8080
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+"""
+        else:
+            dockerfile = f"""
+FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY . .
+EXPOSE 8080
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+"""
+    dockerfile_path = build_dir / "Dockerfile.fly"
+    dockerfile_path.write_text(dockerfile.strip() + "\n", encoding="utf-8")
+    return dockerfile_path
+
+
+def _docker_build_and_push_fly_image(*, build_dir: Path, dockerfile_path: Path, app_name: str, tag: str, token: str) -> str:
+    """Build a container image and push it to the Fly registry."""
+    image_ref = f"registry.fly.io/{app_name}:{tag}"
+    login = subprocess.run(
+        ["docker", "login", "registry.fly.io", "-u", "x", "-p", token],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if login.returncode != 0:
+        raise RuntimeError(f"Docker login failed: {login.stderr.strip() or login.stdout.strip()}")
+
+    build = subprocess.run(
+        ["docker", "build", "-f", str(dockerfile_path), "-t", image_ref, str(build_dir)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if build.returncode != 0:
+        raise RuntimeError(f"Docker build failed: {build.stderr.strip() or build.stdout.strip()}")
+
+    push = subprocess.run(
+        ["docker", "push", image_ref],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if push.returncode != 0:
+        raise RuntimeError(f"Docker push failed: {push.stderr.strip() or push.stdout.strip()}")
+    return image_ref
 
 
 def validate_pre_deployment(
@@ -127,7 +337,7 @@ def validate_pre_deployment(
     preferred = str(preferred_provider or "").strip().lower() or None
 
     static_candidates = [p for p in ["vercel", "netlify"] if creds.get(p)]
-    backend_candidates = ["railway"] if creds.get("railway") else []
+    backend_candidates = [provider for provider in ["fly", "railway", "gcp"] if creds.get(provider)]
     candidates = static_candidates if app_kind == "static" else backend_candidates
 
     if preferred and preferred in candidates:
@@ -144,7 +354,7 @@ def validate_pre_deployment(
         fix = (
             "Connect Vercel or Netlify credentials to enable public static deployment."
             if app_kind == "static"
-            else "Connect Railway credentials to enable public backend deployment."
+            else "Configure FLY_API_TOKEN, Railway credentials, or GCP project credentials (GCP_PROJECT_ID + service account/ADC)."
         )
         return {
             "ok": False,
@@ -157,7 +367,7 @@ def validate_pre_deployment(
                 {
                     "option": "connect_provider",
                     "label": "Connect provider credentials",
-                    "description": "Add VERCEL_TOKEN / NETLIFY_API_TOKEN for static apps, or RAILWAY_API_KEY for backend apps.",
+                    "description": "Add VERCEL_TOKEN / NETLIFY_API_TOKEN for static apps, or GCP_PROJECT_ID + service account/ADC for backend apps.",
                 },
                 {
                     "option": "auto_publish_github_then_deploy",
@@ -170,7 +380,7 @@ def validate_pre_deployment(
             "success_probability": probability,
         }
 
-    if app_kind == "backend" and not github_url and not creds.get("github"):
+    if app_kind == "backend" and not github_url and not creds.get("github") and "gcp" not in candidates:
         return {
             "ok": False,
             "action": NEEDS_CREDENTIALS_ACTION,
@@ -182,7 +392,7 @@ def validate_pre_deployment(
                 {
                     "option": "connect_provider",
                     "label": "Connect provider credentials",
-                    "description": "Keep Railway credentials available for backend deployment.",
+                    "description": "Keep Fly, Railway, or GCP credentials available for backend deployment.",
                 },
                 {
                     "option": "auto_publish_github_then_deploy",
@@ -250,6 +460,8 @@ def _normalize_error_signature(message: str) -> str:
         return "provider_timeout"
     if "unsupported" in text:
         return "provider_mismatch"
+    if "free plan" in text or "resource provision" in text or "quota" in text:
+        return "provider_quota_exceeded"
     return "provider_error"
 
 
@@ -313,9 +525,11 @@ def _derive_learning_strategy(
     best_rate = 0.0
     for provider in provider_candidates:
         stats = provider_stats.get(provider)
-        if not stats or stats["total"] < 2:
-            continue
-        rate = stats["success"] / max(1, stats["total"])
+        if not stats:
+            rate = 0.5
+        else:
+            # Bayesian smoothing: lets the agent make a choice even when a provider has little history.
+            rate = (stats["success"] + 1) / (stats["total"] + 2)
         if rate > best_rate:
             best_rate = rate
             preferred_provider = provider
@@ -674,13 +888,13 @@ async def deploy_backend_to_railway(
     workspace_id = os.getenv("RAILWAY_WORKSPACE_ID", "").strip()
 
     async with httpx.AsyncClient(timeout=60) as client:
-        # Create project
+        # Step 1: Create project
         project_input = f'name: "{_sanitize_project_name(project_name)}"'
         if workspace_id:
             project_input += f', workspaceId: "{workspace_id}"'
 
         resp = await client.post(gql_url, headers=headers, json={
-            "query": f"mutation {{ projectCreate(input: {{{project_input}}}) {{ id }} }}"
+            "query": f"mutation {{ projectCreate(input: {{{project_input}}}) {{ id environments {{ edges {{ node {{ id }} }} }} }} }}"
         })
         if resp.status_code != 200:
             raise RuntimeError(f"Railway project creation failed: {resp.text[:300]}")
@@ -689,6 +903,9 @@ async def deploy_backend_to_railway(
         if payload.get("errors"):
             err = payload["errors"][0].get("message", "Unknown Railway GraphQL error")
             err_l = str(err).lower()
+            # Detect common Railway quota / free-tier provisioning messages and surface a clear error
+            if "free plan" in err_l or "resource provision" in err_l or "provision limit" in err_l or "quota" in err_l:
+                raise RuntimeError(f"Railway project creation failed: {err}")
             if "workspaceid" in err_l and not workspace_id:
                 raise RuntimeError(
                     "Railway project creation failed: workspaceId is required. "
@@ -701,7 +918,48 @@ async def deploy_backend_to_railway(
         if not railway_project_id:
             raise RuntimeError("Railway did not return a project ID")
 
+        # Extract the default environment ID
+        env_edges = (project_data.get("environments") or {}).get("edges") or []
+        environment_id = env_edges[0]["node"]["id"] if env_edges else None
+
         add_log(project_id, "deployment_agent", f"Railway project created: {railway_project_id}", "info")
+
+        # Step 2: Create a service from the GitHub repo
+        service_name = _sanitize_project_name(project_name)
+        source_block = ""
+        if github_url:
+            source_block = f', source: {{ repo: "{github_url}" }}'
+
+        svc_resp = await client.post(gql_url, headers=headers, json={
+            "query": f'mutation {{ serviceCreate(input: {{ projectId: "{railway_project_id}", name: "{service_name}"{source_block} }}) {{ id }} }}'
+        })
+        svc_payload = svc_resp.json() if svc_resp.content else {}
+        svc_data = (svc_payload.get("data") or {}).get("serviceCreate") or {}
+        service_id = svc_data.get("id")
+
+        if svc_payload.get("errors"):
+            err = svc_payload["errors"][0].get("message", "Service creation failed")
+            add_log(project_id, "deployment_agent", f"Railway service creation error: {err}", "warn")
+        elif service_id:
+            add_log(project_id, "deployment_agent", f"Railway service created: {service_id}", "info")
+
+            # Step 3: Generate a public domain for the service
+            if environment_id and service_id:
+                domain_resp = await client.post(gql_url, headers=headers, json={
+                    "query": f'mutation {{ serviceDomainCreate(input: {{ serviceId: "{service_id}", environmentId: "{environment_id}" }}) {{ domain }} }}'
+                })
+                domain_payload = domain_resp.json() if domain_resp.content else {}
+                domain_data = (domain_payload.get("data") or {}).get("serviceDomainCreate") or {}
+                assigned_domain = domain_data.get("domain")
+                if assigned_domain:
+                    add_log(project_id, "deployment_agent", f"Railway domain assigned: {assigned_domain}", "info")
+
+                # Step 4: Set environment variables if any
+                if env_vars and environment_id:
+                    for key, value in env_vars.items():
+                        await client.post(gql_url, headers=headers, json={
+                            "query": f'mutation {{ variableUpsert(input: {{ projectId: "{railway_project_id}", serviceId: "{service_id}", environmentId: "{environment_id}", name: "{key}", value: "{value}" }}) }}'
+                        })
 
     deployment_url = await _poll_railway_for_url(
         railway_project_id=railway_project_id,
@@ -712,7 +970,7 @@ async def deploy_backend_to_railway(
     return {
         "provider": "railway",
         "deployment_url": deployment_url,
-        "status": "success",
+        "status": "success" if deployment_url else "failed",
         "details": {"railway_project_id": railway_project_id},
     }
 
@@ -734,7 +992,8 @@ async def _poll_railway_for_url(
     }
     gql_url = "https://backboard.railway.app/graphql/v2"
 
-    query = """
+    # Step 1: Get services and environments for the project
+    project_query = """
     query GetProject($id: String!) {
       project(id: $id) {
         services {
@@ -742,11 +1001,14 @@ async def _poll_railway_for_url(
             node {
               id
               name
-              domains {
-                serviceDomains {
-                  domain
-                }
-              }
+            }
+          }
+        }
+        environments {
+          edges {
+            node {
+              id
+              name
             }
           }
         }
@@ -754,54 +1016,87 @@ async def _poll_railway_for_url(
     }
     """
 
+    # Step 2: Query domains per service
+    domains_query = """
+    query GetDomains($projectId: String!, $environmentId: String!, $serviceId: String!) {
+      domains(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) {
+        serviceDomains {
+          domain
+        }
+      }
+    }
+    """
+
     deadline = asyncio.get_event_loop().time() + (max(1, timeout_minutes) * 60)
     async with httpx.AsyncClient(timeout=30) as client:
+        attempts = 0
         while asyncio.get_event_loop().time() < deadline:
             try:
+                # Fetch project structure
                 resp = await client.post(
                     gql_url,
                     headers=headers,
-                    json={"query": query, "variables": {"id": railway_project_id}},
+                    json={"query": project_query, "variables": {"id": railway_project_id}},
                 )
-                if resp.status_code == 200:
-                    payload = resp.json() if resp.content else {}
-                    services = (
-                        payload.get("data", {})
-                        .get("project", {})
-                        .get("services", {})
-                        .get("edges", [])
-                    )
+                if resp.status_code != 200:
+                    add_log(project_id, "deployment_agent", f"Railway poll HTTP {resp.status_code}", "warn")
+                    sleep_seconds = min(30, 3 + attempts * 5)
+                    attempts += 1
+                    await asyncio.sleep(sleep_seconds)
+                    continue
 
-                    for edge in services:
-                        node = edge.get("node", {})
-                        domains = node.get("domains", {}).get("serviceDomains", [])
-                        for domain_row in domains:
+                payload = resp.json() if resp.content else {}
+                project_data = (payload.get("data") or {}).get("project") or {}
+                services = (project_data.get("services") or {}).get("edges") or []
+                environments = (project_data.get("environments") or {}).get("edges") or []
+
+                if not services or not environments:
+                    add_log(project_id, "deployment_agent", "Waiting for Railway service to be ready...", "info")
+                    sleep_seconds = min(30, 3 + attempts * 5)
+                    attempts += 1
+                    await asyncio.sleep(sleep_seconds)
+                    continue
+
+                env_id = environments[0]["node"]["id"]
+
+                # Check domains for each service
+                for edge in services:
+                    svc_id = edge["node"]["id"]
+                    dom_resp = await client.post(
+                        gql_url,
+                        headers=headers,
+                        json={
+                            "query": domains_query,
+                            "variables": {
+                                "projectId": railway_project_id,
+                                "environmentId": env_id,
+                                "serviceId": svc_id,
+                            },
+                        },
+                    )
+                    if dom_resp.status_code == 200:
+                        dom_payload = dom_resp.json() if dom_resp.content else {}
+                        service_domains = (
+                            (dom_payload.get("data") or {})
+                            .get("domains", {})
+                            .get("serviceDomains", [])
+                        )
+                        for domain_row in service_domains:
                             domain = str(domain_row.get("domain") or "").strip()
                             if domain:
                                 url = _normalize_public_url(domain)
-                                add_log(
-                                    project_id,
-                                    "deployment_agent",
-                                    f"Railway URL ready: {url}",
-                                    "info",
-                                )
+                                add_log(project_id, "deployment_agent", f"Railway URL ready: {url}", "info")
                                 return url
 
-                add_log(
-                    project_id,
-                    "deployment_agent",
-                    "Waiting for Railway deployment URL...",
-                    "info",
-                )
-                await asyncio.sleep(10)
+                add_log(project_id, "deployment_agent", "Waiting for Railway deployment URL...", "info")
+                sleep_seconds = min(30, 3 + attempts * 5)
+                attempts += 1
+                await asyncio.sleep(sleep_seconds)
             except Exception as exc:
-                add_log(
-                    project_id,
-                    "deployment_agent",
-                    f"Railway URL polling error: {exc}",
-                    "warn",
-                )
-                await asyncio.sleep(15)
+                add_log(project_id, "deployment_agent", f"Railway URL polling error: {exc}", "warn")
+                sleep_seconds = min(45, 5 + attempts * 10)
+                attempts += 1
+                await asyncio.sleep(sleep_seconds)
 
     add_log(
         project_id,
@@ -848,6 +1143,129 @@ async def deploy_backend_to_render(
         "deployment_url": _normalize_public_url(service_url),
         "status": "success",
         "details": {"service_id": service_id},
+    }
+
+
+async def deploy_backend_to_fly(
+    project_id: int,
+    project_name: str,
+    github_url: str,
+    env_template: str,
+    stack_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Deploy a backend app to Fly.io using the GraphQL + Docker registry flow."""
+    token = os.getenv("FLY_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("FLY_API_TOKEN not set")
+
+    app_name = _sanitize_project_name(project_name)
+    env_vars = _parse_env_template(env_template)
+    stack_info = stack_info or {}
+
+    add_log(project_id, "deployment_agent", f"Preparing Fly.io deployment for app '{app_name}'.", "info")
+
+    app = _fly_find_or_create_app(app_name)
+    app_id = str(app.get("id") or "").strip()
+    if not app_id:
+        raise RuntimeError("Fly app lookup/create did not return an app id")
+
+    # Allocate public networking. Fly requires both IP types for normal web access.
+    try:
+        ipv6 = _fly_allocate_ip(app_id, "v6")
+        if ipv6:
+            add_log(project_id, "deployment_agent", f"Allocated Fly IPv6: {ipv6.get('address') or ipv6.get('id')}", "info")
+    except Exception as exc:
+        add_log(project_id, "deployment_agent", f"Fly IPv6 allocation warning: {exc}", "warn")
+
+    try:
+        ipv4 = _fly_allocate_ip(app_id, "shared_v4")
+        if ipv4:
+            add_log(project_id, "deployment_agent", f"Allocated Fly shared IPv4: {ipv4.get('address') or ipv4.get('id')}", "info")
+    except Exception as exc:
+        add_log(project_id, "deployment_agent", f"Fly shared IPv4 allocation warning: {exc}", "warn")
+
+    build_dir = _copy_source_to_temp_dir(project_id)
+    dockerfile_path = _build_fly_dockerfile(build_dir, project_name, stack_info)
+    image_tag = secrets.token_hex(4)
+    image_ref = _docker_build_and_push_fly_image(
+        build_dir=build_dir,
+        dockerfile_path=dockerfile_path,
+        app_name=app_name,
+        tag=image_tag,
+        token=token,
+    )
+    add_log(project_id, "deployment_agent", f"Fly image pushed: {image_ref}", "info")
+
+    # Backend web service config for Fly Machines.
+    machine_config = {
+        "image": image_ref,
+        "env": env_vars,
+        "restart": {"policy": "always"},
+        "guest": {"cpu_kind": "shared", "cpus": 1, "memory_mb": 1024},
+        "services": [
+            {
+                "protocol": "tcp",
+                "internal_port": 8080,
+                "ports": [
+                    {"port": 80, "handlers": ["http"], "force_https": True},
+                    {"port": 443, "handlers": ["tls", "http"]},
+                ],
+                "autostart": True,
+                "autostop": "stop",
+                "min_machines_running": 1,
+                "concurrency": {"type": "requests", "soft_limit": 20, "hard_limit": 50},
+            }
+        ],
+        "metadata": {
+            "fly_process_group": "app",
+            "fly_platform_version": "v2",
+            "nestify_project_id": str(project_id),
+        },
+    }
+
+    launch_data = _graphql_fly_request(
+        """
+        mutation($input: LaunchMachineInput!) {
+          launchMachine(input: $input) {
+            app { id name appUrl }
+            machine { id name state region }
+          }
+        }
+        """,
+        {
+            "input": {
+                "appId": app_id,
+                "name": app_name,
+                "config": machine_config,
+            }
+        },
+    )
+    launch_payload = launch_data.get("launchMachine") or {}
+    machine = launch_payload.get("machine") or {}
+    if not machine.get("id"):
+        raise RuntimeError("Fly machine launch did not return a machine id")
+
+    add_log(
+        project_id,
+        "deployment_agent",
+        f"Fly machine launched: {machine.get('id')} in region {machine.get('region') or 'auto'}",
+        "info",
+    )
+
+    public_url = f"https://{app_name}.fly.dev"
+    if not await _wait_for_live_url(public_url, timeout_seconds=180):
+        raise RuntimeError("Fly deployment did not become reachable in time.")
+
+    return {
+        "provider": "fly",
+        "deployment_url": public_url,
+        "status": "success",
+        "details": {
+            "app_id": app_id,
+            "machine_id": machine.get("id"),
+            "machine_region": machine.get("region"),
+            "app_name": app_name,
+        },
     }
 
 
@@ -947,6 +1365,32 @@ async def _publish_source_to_temporary_github_repo(project_id: int, project_name
     return repo_url
 
 
+def _validate_github_token(token: str) -> str:
+    """Validate a GitHub token synchronously (used for fail-fast checks).
+
+    Returns the login name if valid, otherwise raises RuntimeError.
+    """
+    token = (token or "").strip()
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN not configured")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Nestify-Deployment-Agent",
+    }
+    try:
+        resp = httpx.get("https://api.github.com/user", headers=headers, timeout=20)
+    except Exception as exc:
+        raise RuntimeError(f"GitHub token validation request failed: {exc}")
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GitHub token invalid: {resp.text[:220]}")
+    owner = (resp.json() or {}).get("login")
+    if not owner:
+        raise RuntimeError("GitHub token validation did not return a user login")
+    return str(owner)
+
+
 # ─── Unified Deployment Executor ─────────────────────────────────
 
 
@@ -1043,16 +1487,9 @@ async def execute_deployment(
             add_log(project_id, "deployment_agent", f"Learning record skipped: {learn_error}", "warn")
         return blocker
 
-    provider = str(preflight.get("provider") or choose_provider(app_kind, preferred_provider))
-    learned_provider = str(strategy.get("preferred_provider") or "").strip().lower()
-    if learned_provider and learned_provider in provider_candidates:
-        provider = learned_provider
-        add_log(
-            project_id,
-            "deployment_agent",
-            f"Adjusted provider using learned success history: {provider}.",
-            "info",
-        )
+    # Keep provider selection autonomous and deterministic by app kind + credentials.
+    # Do not override with historical provider bias.
+    provider = str(preflight.get("provider") or choose_provider(app_kind, None))
 
     if app_kind == "static":
         if strategy.get("apply_fix_first"):
@@ -1140,6 +1577,40 @@ async def execute_deployment(
                 "No GitHub URL provided for backend deployment. Attempting temporary GitHub repo publishing.",
                 "info",
             )
+            # Fail-fast validation for GitHub token to avoid repeated failing attempts
+            token = (settings.github_token or os.getenv("GITHUB_TOKEN", "")).strip()
+            if token:
+                try:
+                    owner = _validate_github_token(token)
+                    add_log(project_id, "deployment_agent", f"Validated GitHub token for user: {owner}", "info")
+                except Exception as exc:
+                    reason = f"Invalid GITHUB_TOKEN: {exc}"
+                    error_signatures.append(_normalize_error_signature(reason))
+                    result = _failure_payload(
+                        provider=provider,
+                        app_kind=app_kind,
+                        reason=reason,
+                        fix_suggestion="Provide a valid GITHUB_TOKEN with repository creation permissions.",
+                        next_action="Update GITHUB_TOKEN and retry, or provide a github_url.",
+                        success_probability=success_probability,
+                        action=NEEDS_CREDENTIALS_ACTION,
+                    )
+                    update_project(project_id, {
+                        "deployment": result,
+                        "status": "failed",
+                    })
+                    try:
+                        _record_learning(
+                            project_id=project_id,
+                            framework=framework,
+                            provider=provider,
+                            result=result,
+                            error_signatures=error_signatures,
+                            strategy_reason=str(strategy.get("reason") or ""),
+                        )
+                    except Exception as learn_error:
+                        add_log(project_id, "deployment_agent", f"Learning record skipped: {learn_error}", "warn")
+                    return result
             try:
                 github_url = await _publish_source_to_temporary_github_repo(project_id=project_id, project_name=project_name)
             except Exception as exc:
@@ -1173,10 +1644,40 @@ async def execute_deployment(
                 return result
         add_log(project_id, "deployment_agent", f"Deploying backend app via {provider}", "info")
         try:
-            if provider == "railway":
+            if provider == "gcp":
+                provider_client = GCPDeploymentProvider(
+                    project_id=project_id,
+                    project_name=project_name,
+                    stack_info=stack_info,
+                    app_kind=app_kind,
+                )
+                gcp_result = await provider_client.deploy(os.getenv("GCP_SERVICE_ACCOUNT_JSON", "").strip() or None)
+                failure_reason = gcp_result.failure_reason
+                result = {
+                    "provider": gcp_result.provider,
+                    "deployment_url": gcp_result.live_url,
+                    "status": "success" if gcp_result.live_url else "failed",
+                    "details": {
+                        "region": gcp_result.region,
+                        "image_uri": gcp_result.image_uri,
+                        "cost_estimate_usd_monthly": gcp_result.cost_estimate_usd_monthly,
+                        "free_tier_usage_percent": gcp_result.free_tier_usage_percent,
+                        "audit_log_url": gcp_result.audit_log_url,
+                        "failure_reason": failure_reason,
+                        "reason": failure_reason,
+                        "plain_english_error": failure_reason,
+                        "billing_status": provider_client.billing_status,
+                        "cost_warning": provider_client.cost_warning,
+                    },
+                }
+            elif provider == "railway":
                 result = await deploy_backend_to_railway(project_id, project_name, github_url, env_template)
+            elif provider == "fly":
+                result = await deploy_backend_to_fly(project_id, project_name, github_url, env_template, stack_info)
             else:
-                raise RuntimeError(f"Unsupported backend provider: {provider}. Supported backend provider: railway")
+                raise RuntimeError(
+                    f"Unsupported backend provider: {provider}. Supported backend providers: gcp, railway, fly"
+                )
         except Exception as exc:
             reason = f"Backend deployment failed on {provider}: {exc}"
             error_signatures.append(_normalize_error_signature(reason))

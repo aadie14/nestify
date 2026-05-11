@@ -84,3 +84,20 @@ def standard_agent_output(
         "confidence": max(0.0, min(1.0, float(confidence))),
         "risk": str(risk or "medium").strip().lower() or "medium",
     }
+
+
+def standard_agent_event(
+    *,
+    agent: str,
+    event: str,
+    details: str,
+    confidence: float,
+) -> dict[str, Any]:
+    """Return short, user-facing event payload for agent execution feed."""
+
+    return {
+        "agent": str(agent or "system"),
+        "event": _trim_line(event, max_len=70),
+        "details": _trim_line(details, max_len=140),
+        "confidence": max(0.0, min(1.0, float(confidence))),
+    }

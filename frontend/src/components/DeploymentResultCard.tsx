@@ -56,6 +56,24 @@ export default function DeploymentResultCard({ status, provider, deploymentUrl, 
         <div className="tiny" style={{ color: 'var(--brand-warning)' }}>{liveUrlHint}</div>
       )}
 
+      {normalizedProvider === 'gcp' && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+          {typeof details?.region === 'string' && (
+            <span className="tiny" style={{ background: 'rgba(66,133,244,0.1)', padding: '3px 10px', borderRadius: 6, color: '#90caf9' }}>
+              Region: {details.region}
+            </span>
+          )}
+          {typeof details?.free_tier_usage_percent === 'number' && (
+            <span className="tiny" style={{ background: 'rgba(52,168,83,0.1)', padding: '3px 10px', borderRadius: 6, color: '#81c784' }}>
+              Free Tier: {details.free_tier_usage_percent}% used
+            </span>
+          )}
+          <span className="tiny" style={{ background: 'rgba(52,168,83,0.1)', padding: '3px 10px', borderRadius: 6, color: '#a5d6a7', fontWeight: 600 }}>
+            ☁️ Google Cloud — $0.00/mo
+          </span>
+        </div>
+      )}
+
       <div className="tiny">Updated: {createdAt || <SkeletonValue width={72} />}</div>
 
       <details className="menu-popdown">

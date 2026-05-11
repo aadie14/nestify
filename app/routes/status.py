@@ -42,6 +42,12 @@ async def get_status(project_id: int):
 
     deployment = get_deployment(project_id)
     pipeline_state, execution_state = _normalize_pipeline_state(project.get("pipeline_state"))
+    parsed_insights = _safe_json(project.get("agentic_insights"))
+    final_output = None
+    if isinstance(parsed_insights, dict):
+        maybe_final = parsed_insights.get("final_output")
+        if isinstance(maybe_final, dict):
+            final_output = maybe_final
 
     return {
         "project": {
@@ -52,13 +58,14 @@ async def get_status(project_id: int):
             "security_report": _safe_json(project.get("security_report")),
             "security_score": project.get("security_score", 0),
             "fix_report": _safe_json(project.get("fix_report")),
-            "agentic_insights": _safe_json(project.get("agentic_insights")),
+            "agentic_insights": parsed_insights,
             "preferred_provider": project.get("preferred_provider"),
             "public_url": project.get("public_url"),
             "pipeline_state": pipeline_state,
             "execution_state": execution_state,
             "created_at": project.get("created_at"),
         },
+        "final_output": final_output,
         "scan_results": get_scan_results(project_id),
         "fix_logs": get_fix_logs(project_id),
         "deployment": dict(deployment) if deployment else None,

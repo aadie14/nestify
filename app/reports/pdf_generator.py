@@ -55,7 +55,7 @@ class SecurityReportGenerator:
         try:
             return self._build_pdf(project, report)
         except Exception:
-            # Graceful fallback if reportlab is unavailable.
+            # Graceful fallback if reportlab is unavailable: emit a valid minimal PDF.
             lines: list[str] = []
             lines.append("Nestify Security Report")
             lines.append(f"Project: {project.get('name', 'Unknown')}")
@@ -71,14 +71,87 @@ class SecurityReportGenerator:
             plan = report.get("deployment_plan") or {}
             lines.append(f"Chosen platform: {plan.get('chosen_platform', 'unknown')}")
             lines.append(f"Confidence: {int(float(plan.get('confidence') or 0.0) * 100)}%")
-            return "\n".join(lines).encode("utf-8")
+            return self._build_minimal_pdf(lines)
+
+    @staticmethod
+    def _build_minimal_pdf(lines: list[str]) -> bytes:
+        """Build a standards-compliant one-page PDF without third-party libraries."""
+
+        def _escape(text: str) -> str:
+            safe = str(text or "")
+            safe = safe.replace("\\", "\\\\")
+            safe = safe.replace("(", "\\(")
+            safe = safe.replace(")", "\\)")
+            safe = safe.replace("\r", " ").replace("\n", " ")
+            # Keep fallback ASCII-only to avoid font encoding issues.
+            return safe.encode("ascii", errors="replace").decode("ascii")
+
+        page_lines = [line for line in (lines or []) if str(line).strip()]
+        if not page_lines:
+            page_lines = ["Nestify Security Report"]
+
+        y = 800
+        content_parts = ["BT", "/F1 11 Tf"]
+        for line in page_lines[:52]:
+            content_parts.append(f"72 {y} Td ({_escape(line)}) Tj")
+            y -= 14
+        content_parts.append("ET")
+        stream_body = "\n".join(content_parts).encode("ascii")
+
+        objects: list[bytes] = []
+        objects.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+        objects.append(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+        objects.append(
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        )
+        objects.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+        objects.append(
+            b"5 0 obj\n<< /Length " + str(len(stream_body)).encode("ascii") +
+            b" >>\nstream\n" + stream_body + b"\nendstream\nendobj\n"
+        )
+
+        header = b"%PDF-1.4\n"
+        body = bytearray(header)
+        offsets = [0]
+
+        for obj in objects:
+            offsets.append(len(body))
+            body.extend(obj)
+
+        xref_start = len(body)
+        xref = bytearray()
+        xref.extend(f"xref\n0 {len(offsets)}\n".encode("ascii"))
+        xref.extend(b"0000000000 65535 f \n")
+        for off in offsets[1:]:
+            xref.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+
+        trailer = (
+            b"trailer\n<< /Size " + str(len(offsets)).encode("ascii") + b" /Root 1 0 R >>\n"
+            b"startxref\n" + str(xref_start).encode("ascii") + b"\n%%EOF\n"
+        )
+
+        body.extend(xref)
+        body.extend(trailer)
+        return bytes(body)
 
     def _build_pdf(self, project: dict[str, Any], report: dict[str, Any]) -> bytes:
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-        from reportlab.lib.units import inch
-        from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.lib import colors  # type: ignore[import-not-found]
+        from reportlab.lib.pagesizes import A4  # type: ignore[import-not-found]
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # type: ignore[import-not-found]
+        from reportlab.lib.units import inch  # type: ignore[import-not-found]
+        from reportlab.platypus import (
+            PageBreak,
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+            Image,
+        )  # type: ignore[import-not-found]
+        # Graphics for charts
+        from reportlab.graphics.shapes import Drawing  # type: ignore[import-not-found]
+        from reportlab.graphics.charts.pie import Pie  # type: ignore[import-not-found]
 
         styles = getSampleStyleSheet()
         styles.add(
@@ -118,8 +191,8 @@ class SecurityReportGenerator:
             pagesize=A4,
             leftMargin=50,
             rightMargin=50,
-            topMargin=45,
-            bottomMargin=40,
+            topMargin=60,
+            bottomMargin=50,
         )
 
         findings_grouped = report.get("findings") or {}
@@ -145,11 +218,37 @@ class SecurityReportGenerator:
         estimated_cost = plan.get("estimated_cost")
 
         story: list[Any] = []
-        story.append(Spacer(1, 0.35 * inch))
+
+        # Cover page
+        story.append(Spacer(1, 1.4 * inch))
         story.append(Paragraph("SECURITY ANALYSIS REPORT", styles["TitlePrimary"]))
+        story.append(Spacer(1, 0.12 * inch))
         story.append(Paragraph(f"Project: <b>{project.get('name', 'Unknown')}</b>", styles["Body"]))
+        story.append(Spacer(1, 0.06 * inch))
         story.append(Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC", styles["Body"]))
-        story.append(Spacer(1, 0.15 * inch))
+        story.append(Spacer(1, 0.4 * inch))
+
+        # Add a quick visual (pie chart) for severity distribution on cover
+        drawing = Drawing(260, 140)
+        pie = Pie()
+        pie.x = 70
+        pie.y = 10
+        pie.width = 120
+        pie.height = 120
+        data_vals = [max(0, critical), max(0, high), max(0, medium), max(0, low), max(0, info)]
+        pie.data = data_vals
+        pie.labels = ["Critical", "High", "Medium", "Low", "Info"]
+        pie.slices.strokeWidth = 0.5
+        pie.slices[0].fillColor = colors.HexColor("#DC2626")
+        pie.slices[1].fillColor = colors.HexColor("#EA580C")
+        pie.slices[2].fillColor = colors.HexColor("#CA8A04")
+        pie.slices[3].fillColor = colors.HexColor("#2563EB")
+        pie.slices[4].fillColor = colors.HexColor("#6B7280")
+        drawing.add(pie)
+        story.append(drawing)
+        story.append(Spacer(1, 0.25 * inch))
+
+        # Quick summary table under cover
 
         summary_table = Table(
             [
@@ -396,7 +495,21 @@ class SecurityReportGenerator:
             )
             story.append(table)
 
-        doc.build(story)
+        # Header/footer: page number and small header text
+        def _header_footer(canvas, doc_obj):
+            canvas.saveState()
+            width, height = A4
+            # Header
+            canvas.setFont("Helvetica", 9)
+            canvas.setFillColor(colors.HexColor("#6B7280"))
+            canvas.drawString(50, height - 35, f"Nestify — Security Analysis Report")
+            # Footer with page number
+            page_no = canvas.getPageNumber()
+            canvas.setFont("Helvetica", 9)
+            canvas.drawRightString(width - 50, 30, f"Page {page_no}")
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
         return buffer.getvalue()
 
 

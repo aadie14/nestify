@@ -19,19 +19,23 @@ class PlatformSelectionStrategist:
                 score += 10
 
         if app_type == "backend":
+            if provider == "gcp":
+                score += 32
             if provider == "railway":
-                score += 30
+                score += 26
 
         if app_type == "docker":
+            if provider == "gcp":
+                score += 36
             if provider == "railway":
-                score += 35
+                score += 30
 
         return min(100, score)
 
     def _candidate_providers(self, app_type: str) -> list[str]:
         if app_type in {"static", "frontend"}:
             return ["vercel", "netlify", "local"]
-        return ["railway", "local"]
+        return ["gcp", "railway", "local"]
 
     def choose(
         self,

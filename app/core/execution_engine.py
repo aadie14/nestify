@@ -24,7 +24,7 @@ from app.agents.fix_agent import FixAgent
 from app.agents.security_agent import SecurityAgent
 from app.agents.simulation_agent import PatchSpec, SimulationAgent
 from app.database import add_log, update_project
-from app.core.feed_formatter import format_feed_event, standard_agent_output
+from app.core.feed_formatter import format_feed_event, standard_agent_event, standard_agent_output
 from app.runtime.metrics_analyzer import MetricsAnalyzer
 from app.runtime.provider_metrics import ProviderMetricsCollector
 from app.services.project_source_service import get_project_source_dir, load_source_text_map
@@ -91,12 +91,15 @@ class ExecutionEngine:
     deterministic and state-driven inside this engine.
     """
 
+    MAX_SELF_HEAL_RETRIES = 3
+
     def __init__(self, project_id: int, progress_callback: ProgressCallback | None = None) -> None:
         self.project_id = project_id
         self.on_progress = progress_callback or (lambda _: None)
         self.state = ExecutionState()
         self.pipeline_states: dict[str, str] = {}
         self.agent_actions: list[dict[str, Any]] = []
+        self.feed_messages: list[dict[str, Any]] = []
         self._cycle = 0
 
     @staticmethod
@@ -159,6 +162,13 @@ class ExecutionEngine:
         pattern: str | None = None,
     ) -> None:
         composed_message = self._compose_reasoned_message(message, reasoning, confidence, pattern)
+        short_event = standard_agent_event(
+            agent=agent,
+            event=phase,
+            details=composed_message,
+            confidence=float(confidence if confidence is not None else 0.0),
+        )
+        self.feed_messages.append(short_event)
         feed_event = format_feed_event(
             agent=agent,
             event_type="status",
@@ -178,6 +188,7 @@ class ExecutionEngine:
             "execution_step": self.state.step,
             "execution_state": asdict(self.state),
             "feed": feed_event,
+            "agent_event": short_event,
         }
         if confidence is not None:
             payload["confidence"] = max(0.0, min(1.0, float(confidence)))
@@ -194,6 +205,13 @@ class ExecutionEngine:
         evidence: list[str] | None = None,
         data: dict[str, Any] | None = None,
     ) -> None:
+        short_event = standard_agent_event(
+            agent=agent,
+            event="decision",
+            details=user_message,
+            confidence=confidence,
+        )
+        self.feed_messages.append(short_event)
         feed_event = format_feed_event(
             agent=agent,
             event_type="decision",
@@ -226,6 +244,7 @@ class ExecutionEngine:
             "evidence": item["evidence"],
             "data": item["data"],
             "feed": feed_event,
+            "agent_event": short_event,
         })
 
     @staticmethod
@@ -268,22 +287,87 @@ class ExecutionEngine:
         }
         add_log(self.project_id, "ExecutionEngine", str(payload), "info")
 
-    def _build_plan(self, files: list[dict[str, str]]) -> dict[str, Any]:
-        file_count = len(files)
-        risk = "low"
-        if file_count > 30:
-            risk = "medium"
-        if file_count > 120:
-            risk = "high"
+    def _build_plan(self, preferred_platform: str | None, confidence: float) -> dict[str, Any]:
+        platform = str(preferred_platform or "auto").strip().lower() or "auto"
         return {
-            "tasks": [
+            "steps": [
                 "code_analysis",
-                "security_analysis",
-                "cost_estimation",
-                "platform_selection",
+                "security_scan",
+                "fix_generation",
+                "validation",
+                "deployment",
             ],
-            "parallel": ["code_analysis", "security_analysis"],
-            "risk_level": risk,
+            "platform": platform,
+            "confidence": round(max(0.0, min(1.0, float(confidence))), 2),
+        }
+
+    @staticmethod
+    def _to_security_issues(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        security_report = report if isinstance(report, dict) else {}
+        for severity in ("critical", "high", "medium", "info"):
+            bucket = security_report.get(severity)
+            if not isinstance(bucket, list):
+                continue
+            for item in bucket:
+                if not isinstance(item, dict):
+                    continue
+                issues.append(
+                    {
+                        "type": str(item.get("type") or item.get("title") or "security_issue"),
+                        "severity": str(item.get("severity") or severity),
+                        "file": str(item.get("file") or "unknown"),
+                        "fix": str(item.get("recommendation") or "Review and remediate"),
+                        "explanation": str(item.get("description") or item.get("title") or "Security issue detected."),
+                    }
+                )
+        return issues
+
+    def _build_final_output(
+        self,
+        *,
+        report: dict[str, Any] | None,
+        deployment_payload: dict[str, Any] | None,
+        context: dict[str, Any],
+        status: str,
+        failure_reason: str | None,
+    ) -> dict[str, Any]:
+        issues = self._to_security_issues(report)
+        deployment_status = "success" if status in {"live", "completed"} else "failed"
+        deployment_reason = str(failure_reason or context.get("fatal_blocker") or "").strip() or None
+
+        deployment_attempts = context.get("self_heal_attempts") or []
+        changes = [
+            str(item.get("fix_type") or item.get("file") or "fix_applied")
+            for item in (context.get("fixes_applied") or [])
+            if isinstance(item, dict)
+        ]
+
+        chosen_platform = str(context.get("preferred_provider") or "auto")
+        audit_report = {
+            "issues": issues,
+            "summary": (
+                f"{len(issues)} issue(s) identified. Deployment {deployment_status}."
+                if deployment_status == "success"
+                else f"{len(issues)} issue(s) identified. Deployment failed."
+            ),
+            "deployment_decision": (
+                f"Proceed via {chosen_platform}."
+                if deployment_status == "success"
+                else f"Blocked on {chosen_platform} until failures are resolved."
+            ),
+        }
+
+        return {
+            "feed": self.feed_messages[-80:],
+            "audit_report": audit_report,
+            "deployment": {
+                "status": deployment_status,
+                "url": str((deployment_payload or {}).get("deployment_url") or ""),
+                "attempts": deployment_attempts,
+                "changes": changes,
+                "failure_reason": deployment_reason,
+            },
         }
 
     def _derive_memory_signals(self, similar_deployments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -561,7 +645,16 @@ class ExecutionEngine:
         pdf_path: str | None = None
         source_payload = project.get("source_payload") if isinstance(project.get("source_payload"), dict) else parsed_input
         analysis_only = bool(parsed_input.get("analysis_only"))
-        execution_plan = self._build_plan(files)
+        initial_confidence = 0.65
+        plan_risk = "low"
+        if len(files) > 30:
+            plan_risk = "medium"
+        if len(files) > 120:
+            plan_risk = "high"
+        execution_plan = self._build_plan(
+            preferred_platform=str(project.get("preferred_provider") or "").strip().lower() or None,
+            confidence=initial_confidence,
+        )
 
         # Shared context for meta-agent control loop.
         context: dict[str, Any] = {
@@ -570,11 +663,13 @@ class ExecutionEngine:
             "analysis": {},
             "failures": [],
             "actions_taken": [],
-            "confidence": 0.65,
+            "confidence": initial_confidence,
             "goal_achieved": False,
             "decision_log": [],
             "security_scanned": False,
             "fixes_applied": False,
+            "fix_cycle_completed": False,
+            "security_rescanned_after_fix": False,
             "deployment_attempted": False,
             "deploy_attempts": 0,
             "provider_attempts": {},
@@ -632,7 +727,7 @@ class ExecutionEngine:
                 return _decision_entry(
                     "Applying deterministic execution plan.",
                     "analyze_code",
-                    f"Plan tasks={plan.get('tasks', [])}; parallel={plan.get('parallel', [])}",
+                    f"Plan steps={plan.get('steps', [])}; platform={plan.get('platform')}",
                     context["confidence"],
                 )
 
@@ -669,7 +764,7 @@ class ExecutionEngine:
                     )
                 return _decision_entry(
                     f"Stopping because a fatal blocker was detected: {blocker}",
-                    "fallback_local",
+                    "stop_with_explanation",
                     "Continuing retries would repeat the same failure without new deploy prerequisites.",
                     context["confidence"],
                 )
@@ -677,8 +772,16 @@ class ExecutionEngine:
             if context.get("retry_exhausted"):
                 return _decision_entry(
                     "Stopping because all retry modifications have been exhausted.",
-                    "fallback_local",
+                    "stop_with_explanation",
                     "No distinct remediation remains, so local fallback keeps the app available.",
+                    context["confidence"],
+                )
+
+            if context.get("deploy_attempts", 0) >= self.MAX_SELF_HEAL_RETRIES and context.get("failures"):
+                return _decision_entry(
+                    "Stopping because deployment retry budget has been exhausted.",
+                    "stop_with_explanation",
+                    "Maximum self-healing retries reached (3).",
                     context["confidence"],
                 )
 
@@ -699,11 +802,27 @@ class ExecutionEngine:
                     context["confidence"],
                 )
 
-            if context.get("fixes_applied") and not context.get("simulation_validated"):
+            if not context.get("fix_cycle_completed"):
+                return _decision_entry(
+                    "Generating and applying deterministic fixes before deployment.",
+                    "fix_code",
+                    "Deployment flow requires fix generation before validation and deploy.",
+                    context["confidence"],
+                )
+
+            if not context.get("simulation_validated"):
                 return _decision_entry(
                     "Fixes were applied and must be validated before deployment.",
                     "run_simulation",
                     "Simulation gate is mandatory before deploy retries.",
+                    context["confidence"],
+                )
+
+            if not context.get("security_rescanned_after_fix"):
+                return _decision_entry(
+                    "Running security re-scan after fix validation.",
+                    "rescan_security",
+                    "Deployment flow requires post-fix security validation.",
                     context["confidence"],
                 )
 
@@ -713,6 +832,18 @@ class ExecutionEngine:
                 provider = str(last.get("provider") or context.get("preferred_provider") or "auto")
                 provider_attempts = int((context.get("provider_attempts") or {}).get(provider, 0))
                 repeated_failure = int((context.get("failure_type_counts") or {}).get(failure_type, 0)) >= 2
+                if (
+                    context.get("fix_cycle_completed")
+                    and context.get("simulation_validated")
+                    and context.get("security_rescanned_after_fix")
+                    and context.get("deploy_attempts", 0) < self.MAX_SELF_HEAL_RETRIES
+                ):
+                    return _decision_entry(
+                        "Fixes have been applied and validated; retrying deployment.",
+                        "deploy",
+                        "Validated remediation path is ready for the next deployment attempt.",
+                        context["confidence"],
+                    )
                 memory_signals = context.get("memory_signals") or {}
                 recommended_actions = memory_signals.get("recommended_actions") or []
                 if any("provider" in str(item).lower() for item in recommended_actions) and failure_type in {"infra_issue", "unknown"}:
@@ -770,7 +901,7 @@ class ExecutionEngine:
                         context["confidence"],
                     )
 
-                if context.get("deploy_attempts", 0) < 3:
+                if context.get("deploy_attempts", 0) < self.MAX_SELF_HEAL_RETRIES:
                     return _decision_entry(
                         "Unknown failure; applying conservative remediation before next deployment.",
                         "fix_code",
@@ -780,8 +911,8 @@ class ExecutionEngine:
 
                 return _decision_entry(
                     "Failure budget exhausted.",
-                    "fallback_local",
-                    "Fallback keeps execution resilient when cloud retries are exhausted.",
+                    "stop_with_explanation",
+                    "Retries exhausted; ending with explicit failure for operator action.",
                     context["confidence"],
                 )
 
@@ -906,7 +1037,7 @@ class ExecutionEngine:
                     "entry_points": self._detect_entry_points(files),
                 },
                 confidence=float(context.get("confidence") or 0.65),
-                risk=str(execution_plan.get("risk_level") or "medium"),
+                risk=plan_risk,
             )
             security_output = standard_agent_output(
                 agent="SecurityIntelligenceExpert",
@@ -947,10 +1078,18 @@ class ExecutionEngine:
                 "Analysis complete and deployment strategy selected.",
                 {
                     "chosen_platform": chosen_platform,
-                    "risk_level": execution_plan.get("risk_level"),
+                    "risk_level": plan_risk,
                 },
                 confidence=context.get("confidence"),
             )
+
+            # Advance the public execution step to the security audit phase so
+            # frontend progress indicators move past the initial analysis stage.
+            try:
+                self._set_step(ExecutionStep.SECURITY_AUDIT)
+            except Exception:
+                # Non-fatal: prefer continuing execution even if step persistence fails.
+                pass
 
             return {"outcome": "success", "data": context["analysis"]}
 
@@ -967,6 +1106,8 @@ class ExecutionEngine:
                 insights=insights,
             )
             context["security_scanned"] = True
+            if context.get("fix_cycle_completed"):
+                context["security_rescanned_after_fix"] = True
             context["agent_outputs"]["security_analysis"] = standard_agent_output(
                 agent="SecurityIntelligenceExpert",
                 status="success",
@@ -1029,6 +1170,8 @@ class ExecutionEngine:
                 }
                 for item in fix_report.get("applied", [])
             ]
+            context["fix_cycle_completed"] = True
+            context["security_rescanned_after_fix"] = False
             context["simulation_validated"] = len(fix_report.get("simulation_blocked", [])) == 0
             context["agent_outputs"]["fixes"] = standard_agent_output(
                 agent="SelfHealingDeploymentEngineer",
@@ -1070,6 +1213,8 @@ class ExecutionEngine:
                     if sim.passed:
                         req_path.write_text(patched, encoding="utf-8")
                         context["fixes_applied"].append({"fix_type": "dependency_fix", "file": "requirements.txt", "status": "applied"})
+                        context["fix_cycle_completed"] = True
+                        context["security_rescanned_after_fix"] = False
                         context["simulation_validated"] = True
                         self.pipeline_states["fix_dependencies"] = "done"
                         self._emit("FixAgent", "fixing", f"Dependency fix applied for {module}.", reasoning="Missing dependency was detected and validated in simulation.", confidence=context.get("confidence"))
@@ -1139,10 +1284,12 @@ class ExecutionEngine:
         async def _action_change_platform() -> dict[str, Any]:
             stack_info = context.get("stack_info") or security_agent._detect_stack(files)
             runtime = str(stack_info.get("runtime") or "").lower()
+            framework = str(stack_info.get("framework") or "").lower()
             current = str(context.get("preferred_provider") or "").lower()
             attempts = context.get("provider_attempts") or {}
 
-            candidates = ["netlify", "vercel", "local"] if runtime == "node" else ["railway", "local"]
+            is_frontend = runtime == "node" and framework in {"react", "nextjs", "vue", "svelte"}
+            candidates = ["netlify", "vercel", "local"] if is_frontend else ["gcp", "railway", "local"]
             next_platform = next(
                 (
                     item for item in candidates
@@ -1205,6 +1352,9 @@ class ExecutionEngine:
             nonlocal deployment_payload, monitoring_payload, insights, pdf_path
             stack_info = context.get("stack_info") or security_agent._detect_stack(files)
             deploy_agent = DeploymentAgent(self.project_id)
+
+            if int(context.get("deploy_attempts") or 0) >= self.MAX_SELF_HEAL_RETRIES:
+                raise RuntimeError("Maximum self-healing retries reached (3)")
 
             self._set_step(ExecutionStep.DEPLOYMENT)
             context["deployment_attempted"] = True
@@ -1286,6 +1436,7 @@ class ExecutionEngine:
             self.pipeline_states["deployment"] = "done"
             self.pipeline_states["verification"] = "done"
             self.pipeline_states["deployment_agent"] = "done"
+            self.pipeline_states["retry_loop"] = "done"
 
             self._set_step(ExecutionStep.MONITORING)
             monitoring_payload = await self._collect_monitoring(
@@ -1318,7 +1469,7 @@ class ExecutionEngine:
                     github_url=source_payload.get("github_url") if isinstance(source_payload, dict) else None,
                     env_template=project.get("env_template", "") or "",
                     app_type=str(deployment_payload.get("app_kind") or "backend"),
-                    max_attempts=2,
+                    max_attempts=self.MAX_SELF_HEAL_RETRIES,
                 )
                 self_heal_report["status"] = heal_result.get("status", "failed")
                 self_heal_report["attempts"].extend(heal_result.get("attempts", []))
@@ -1414,6 +1565,8 @@ class ExecutionEngine:
                 return await _action_analyze_code()
             if action == "run_security_scan":
                 return await _action_run_security_scan()
+            if action == "rescan_security":
+                return await _action_rescan()
             if action == "fix_code":
                 return await _action_apply_fix()
             if action == "fix_dependencies":
@@ -1460,6 +1613,14 @@ class ExecutionEngine:
                 reasoning="I will iteratively decide, act, and reflect so each step adapts to findings instead of following a rigid pipeline.",
                 confidence=context.get("confidence"),
             )
+            self._emit(
+                "ExecutionEngine",
+                "planning",
+                "Execution plan created.",
+                data=execution_plan,
+                confidence=context.get("confidence"),
+            )
+            context["agent_outputs"]["planning_engine"] = execution_plan
 
             max_iterations = 16
             iteration = 0
@@ -1599,6 +1760,7 @@ class ExecutionEngine:
                 self.pipeline_states.setdefault("deployment", "failed")
                 self.pipeline_states.setdefault("verification", "failed")
                 self.pipeline_states.setdefault("deployment_agent", "failed")
+                self.pipeline_states.setdefault("retry_loop", "failed")
                 raise RuntimeError("Meta-agent stopped before goal was achieved")
 
             final_status = "completed" if context.get("analysis_only") else "live"
@@ -1617,33 +1779,16 @@ class ExecutionEngine:
             insights.production_insights = monitoring_payload
 
             insights_dict = coordinator.to_dict(insights)
-            security_issues = []
-            for severity in ("critical", "high", "medium"):
-                for issue in ((final_scan.report or {}).get(severity, []) if final_scan else []):
-                    if not isinstance(issue, dict):
-                        continue
-                    security_issues.append(
-                        {
-                            "severity": severity,
-                            "title": issue.get("title") or issue.get("type") or "security_issue",
-                            "message": issue.get("description") or issue.get("message") or "Issue detected",
-                            "action": issue.get("recommendation") or "Review and remediate",
-                        }
-                    )
-
-            consolidated_audit = {
-                "summary": f"Execution finished with status {final_status}.",
-                "security_issues": security_issues,
-                "fixes": fix_report.get("applied", []) if isinstance(fix_report, dict) else [],
-                "deployment_plan": {
-                    "platform": chosen_platform,
-                    "reason": (debate_result.get("reasoning") if isinstance(debate_result, dict) else "Deterministic policy selection"),
-                    "confidence": float(context.get("confidence") or 0.0),
-                },
-                "cost_estimate": cost_analysis or {},
-                "confidence_score": round(float(context.get("confidence") or 0.0), 2),
-            }
-            insights_dict["autonomous_audit"] = consolidated_audit
+            final_output_payload = self._build_final_output(
+                report=final_scan.report if final_scan else {},
+                deployment_payload=deployment_payload,
+                context=context,
+                status=final_status,
+                failure_reason=None,
+            )
+            insights_dict["audit_report"] = final_output_payload["audit_report"]
+            insights_dict["final_output"] = final_output_payload
+            insights_dict["planning_engine"] = execution_plan
             insights_dict["meta_agent"] = {
                 "goal": context.get("goal"),
                 "current_state": context.get("current_state"),
@@ -1666,6 +1811,7 @@ class ExecutionEngine:
                 {
                     "status": final_status,
                     "public_url": deployment_payload.get("deployment_url") if isinstance(deployment_payload, dict) else None,
+                    "security_report_pdf": pdf_path,
                     "agentic_insights": insights_dict,
                     "pipeline_state": {
                         "execution_state": asdict(self.state),
@@ -1695,10 +1841,39 @@ class ExecutionEngine:
             self._record_error(exc)
             self.state.status = "failed"
             self._set_step(ExecutionStep.FAILED, status="failed")
+            failed_output = self._build_final_output(
+                report=final_scan.report if final_scan else {},
+                deployment_payload=deployment_payload,
+                context=context,
+                status="failed",
+                failure_reason=str(exc),
+            )
+            failed_insights = {
+                "planning_engine": execution_plan,
+                "audit_report": failed_output["audit_report"],
+                "final_output": failed_output,
+                "meta_agent": {
+                    "goal": context.get("goal"),
+                    "current_state": context.get("current_state"),
+                    "confidence": context.get("confidence"),
+                    "decision_log": context.get("decision_log", []),
+                    "reflections": context.get("reflections", []),
+                    "actions_taken": context.get("actions_taken", []),
+                    "failures": context.get("failures", []),
+                    "fixes_applied": context.get("fixes_applied", []),
+                    "providers_tried": context.get("providers_tried", []),
+                    "provider_attempts": context.get("provider_attempts", {}),
+                    "last_failure_type": context.get("last_failure_type"),
+                    "self_heal_attempts": context.get("self_heal_attempts", []),
+                    "memory_signals": context.get("memory_signals", {}),
+                    "agent_outputs": context.get("agent_outputs", {}),
+                },
+            }
             update_project(
                 self.project_id,
                 {
                     "status": "failed",
+                    "agentic_insights": failed_insights,
                     "pipeline_state": {
                         "execution_state": asdict(self.state),
                         "pipeline_states": self.pipeline_states,
@@ -1721,22 +1896,5 @@ class ExecutionEngine:
                 monitoring=monitoring_payload,
                 agent_actions=self.agent_actions,
                 security_report_pdf=pdf_path,
-                agentic_insights={
-                    "meta_agent": {
-                        "goal": context.get("goal"),
-                        "current_state": context.get("current_state"),
-                        "confidence": context.get("confidence"),
-                        "decision_log": context.get("decision_log", []),
-                        "reflections": context.get("reflections", []),
-                        "actions_taken": context.get("actions_taken", []),
-                        "failures": context.get("failures", []),
-                        "fixes_applied": context.get("fixes_applied", []),
-                        "providers_tried": context.get("providers_tried", []),
-                        "provider_attempts": context.get("provider_attempts", {}),
-                        "last_failure_type": context.get("last_failure_type"),
-                        "self_heal_attempts": context.get("self_heal_attempts", []),
-                        "memory_signals": context.get("memory_signals", {}),
-                        "agent_outputs": context.get("agent_outputs", {}),
-                    }
-                },
+                agentic_insights=failed_insights,
             )

@@ -19,7 +19,7 @@ class _DebateAgent:
         Code profile: {json.dumps(code_profile, ensure_ascii=True)}
         Context: {json.dumps(context, ensure_ascii=True)}
 
-        Propose best deployment platform among: railway, vercel, netlify.
+        Propose best deployment platform among: gcp, railway, vercel, netlify.
         Return JSON with keys: platform, reasoning, priority.
         """
         raw = await call_llm(

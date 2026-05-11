@@ -1,6 +1,6 @@
 # Nestify - Updated Architecture, Agent Graph, and Feature Reference
 
-Last updated: April 2026
+Last updated: May 2026
 
 Nestify is an agentic DevSecOps orchestration platform that performs source analysis, risk reasoning, bounded remediation, and cloud deployment with operator-visible decision traces.
 
@@ -179,6 +179,8 @@ Core stages:
 - structured failure metadata,
 - local fallback when credentials are missing.
 
+Deployment now follows an agentic provider-selection path: Nestify scores available providers from credentials and historical outcomes, then prefers the strongest backend target. Fly.io is included as a first-class backend option alongside Railway and GCP.
+
 ### Monitoring + Learning
 
 - runtime telemetry interpretation,
@@ -190,14 +192,16 @@ Core stages:
 Current routing policy in `DeploymentAgent`:
 
 - static/spa/ssg -> Vercel
-- backend/api/fullstack/docker -> Railway
+- backend/api/fullstack/docker -> agentic backend provider selection (Fly.io, Railway, or GCP based on credentials and historical outcomes)
 - Netlify supported for static deployment alternatives
 - local preview fallback when required cloud credentials are unavailable
 
 Why:
 
 - static-first platforms provide strong CDN/static UX,
-- Railway aligns well with backend runtime hosting,
+- Fly.io is preferred when a backend app can be packaged into a container and the token is available,
+- Railway remains a valid backend option, especially for repo-based deploys,
+- GCP Cloud Run remains available for teams already standardized on Google Cloud,
 - fallback keeps the workflow non-blocking for users.
 
 ## 8) Updated Feature Inventory
@@ -222,10 +226,13 @@ Why:
 - fix generation and simulation validation
 - bounded retries and provider switching
 - structured deploy response contract with next-action guidance
+- Fly.io app creation, container build/push, public IP allocation, machine launch, and URL verification
 
 ### 8.4 Frontend UX Contracts
 
 - staged analysis progress
+- source input modes for code paste, GitHub repo, and ZIP upload
+- optional staged project creation before autonomous execution
 - structured one-line feed
 - deploy step progress + completion bar
 - changes-applied diff section
@@ -262,6 +269,7 @@ Backend:
 - FastAPI + Uvicorn: async orchestration and API throughput
 - Pydantic: strict contract validation
 - httpx: resilient provider/LLM HTTP integration
+- Docker + Fly.io Machines API: container-native backend deployments with public Anycast networking
 
 Frontend:
 
@@ -278,6 +286,7 @@ Intelligence:
 ## 11) Security and Repo Hygiene
 
 - do not commit `.env` or secrets
+- use `.env.example` as the checked-in template for required environment variables
 - do not commit runtime dumps, DB sidecars, or generated source snapshots
 - do not commit virtual environment directories or build artifacts
 
@@ -285,4 +294,85 @@ Intelligence:
 
 - `README_ARCHITECTURE.md`
 - `DEPLOYMENT_GUIDE.md`
+- `docs/NESTIFY_AGENTIC_REPORT.md`
 - `docs/NESTIFY_ENGINEERING_JUSTIFICATION.md`
+
+## Quickstart (Local)
+
+1. Create a Python virtual environment and install dependencies:
+
+  ```bash
+  python -m venv .venv
+  source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+  pip install -r requirements.txt
+  ```
+
+2. Copy environment template and populate provider keys (do not commit):
+
+  ```bash
+  cp .env.example .env
+  # edit .env to add RAILWAY_API_KEY, RAILWAY_WORKSPACE_ID, GITHUB_TOKEN, VERCEL_TOKEN as needed
+  ```
+
+3. Run the app locally (reload helpful during development):
+
+  ```bash
+  .venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+  ```
+
+4. Open the UI at http://localhost:8000 or use the API endpoints documented below.
+
+## Generating the Professional PDF Report
+
+Nestify produces a branded, multi-section PDF security report suitable for executive review and engineering remediation. The PDF generator produces:
+
+- Cover page with project name, generation timestamp, and a severity distribution chart.
+- Executive summary with a concise findings table and platform recommendation.
+- Detailed findings with file/line, impact, and remediation suggestions.
+- Vulnerability & remediation sections, applied changes, and deployment intelligence.
+- Page headers/footers and numbered pages for easy referencing.
+
+How to generate:
+
+- Programmatically: call the reports endpoint `GET /api/v1/projects/{project_id}/report/pdf` which uses `app/reports/pdf_generator.py`.
+- From Python (example):
+
+```python
+from app.reports.pdf_generator import SecurityPdfGenerator
+from app.database import get_project, get_scan_results
+
+project = get_project(56)
+findings = get_scan_results(56)
+report = {"findings": findings}
+pdf = SecurityPdfGenerator().build(project, report)
+open('report.pdf','wb').write(pdf)
+```
+
+Notes & improvements made:
+- Cover page and pie-chart summarizing severities.
+- Header/footer with page numbers.
+- Improved tables and sectioning for an executive + engineering audience.
+
+If you want a fully branded PDF (logo, colors), set `NESTIFY_REPORT_DIR` and place `logo.png` in that folder; the generator will include it if available.
+
+## Troubleshooting: Railway "Not Found" placeholder (provisioning)
+
+If your deployed app shows Railway's "Not Found / train has not arrived" placeholder page after a successful deployment record, try the following checklist:
+
+1. Wait ~30–90 seconds for Railway to provision a public domain and TLS certificate; the platform may return a placeholder until provisioning completes.
+2. Confirm the deployment record and Railway project id in the DB: query `get_deployment(project_id)` and ensure `status` == `success` and `details` contains `railway_project_id`.
+3. Inspect recent project logs via `get_project_logs(project_id)` for any provisioning-related messages or domain assignment failures.
+4. If the domain is your custom domain (not `railway.app`), ensure DNS is pointed correctly and the Railway domain verification step completed.
+5. If the app responds on the Railway internal URL but not the public domain, open Railway console and check service logs and routes. Sometimes a container crashed after startup but deployment was recorded — logs show crash traces.
+6. Re-deploy if provisioning fails repeatedly; the system will create a fresh Railway project and route during an autonomous deploy.
+
+If you'd like, I can add a small retry/polling improvement in `app/services/deployment_service.py` to extend domain-provision polling (with exponential backoff) and surface clearer failure reasons into the PDF and project logs.
+
+## What's next I can do for you
+
+- Monitor the deployed URL and run an end-to-end health request.
+- Add extended Railway domain-provision polling and clearer log messages.
+- Further enhance PDF output: add a Table of Contents, per-section anchors, and embedded service logs.
+
+---
+_Last update: May 2026 — for internal use only. Do not commit secrets._

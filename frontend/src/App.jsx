@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import axios from 'axios';
 import { Check } from 'lucide-react';
 import StateMessage from './components/ui/StateMessage';
+import ErrorBoundary from './components/ui/ErrorBoundary';
 
 const UploadPage = lazy(() => import('./pages/Upload'));
 const AnalysisPage = lazy(() => import('./pages/Analysis'));
@@ -211,8 +212,10 @@ function AppFrame() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppFrame />
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AppFrame />
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

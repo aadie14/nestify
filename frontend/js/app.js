@@ -138,7 +138,7 @@ async function submitProject() {
             formData.append('description', desc);
         }
 
-        const response = await fetch(`${API_BASE}/api/upload`, {
+        const response = await fetch(`${API_BASE}/api/upload/`, {
             method: 'POST',
             body: formData,
         });

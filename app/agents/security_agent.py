@@ -107,6 +107,12 @@ class SecurityAgent:
             SecurityScanResult with report, risk-engine score, graph, and risk report.
         """
         add_log(self.project_id, "SecurityAgent", "Starting graph-aware security scan", "info")
+        # Emit initial progress so UI shows scanning has started
+        try:
+            from app.routes.upload import _append_progress
+            _append_progress(self.project_id, {"agent": "SecurityAgent", "phase": "scanning", "message": "Starting graph-aware security scan", "progress": 0})
+        except Exception:
+            pass
 
         # ── Step 1: Build the code graph ────────────────────────────────
         try:
@@ -119,6 +125,11 @@ class SecurityAgent:
                 f"{graph_stats.get('imports', 0)} imports",
                 "info",
             )
+            try:
+                from app.routes.upload import _append_progress
+                _append_progress(self.project_id, {"agent": "SecurityAgent", "phase": "scanning", "message": "Code graph built", "progress": 5})
+            except Exception:
+                pass
         except Exception as exc:
             add_log(self.project_id, "SecurityAgent", f"Graph build failed: {exc}", "warn")
             self._graph = None
@@ -128,7 +139,29 @@ class SecurityAgent:
             stack_info = self._detect_stack(files)
 
         # ── Step 3: Run deterministic pattern scan ──────────────────────
-        report = run_static_source_scan(files, stack_info)
+        # Emit incremental progress while scanning files so frontend shows real-time coverage.
+        report = {}
+        try:
+            total = max(1, len(files))
+            # Process files in batches to avoid flooding progress messages.
+            batch = 50
+            for i in range(0, total, batch):
+                chunk = files[i : i + batch]
+                # Let the existing deterministic scanner handle the chunk; it's fast and synchronous.
+                partial = run_static_source_scan(chunk, stack_info)
+                # Merge partial report into overall report structure
+                for k, v in (partial or {}).items():
+                    report.setdefault(k, []).extend(v if isinstance(v, list) else [v])
+                # Emit progress
+                try:
+                    from app.routes.upload import _append_progress
+                    pct = int(min(90, ((i + len(chunk)) / total) * 80) + 5)
+                    _append_progress(self.project_id, {"agent": "SecurityAgent", "phase": "scanning", "message": f"Scanned {i + len(chunk)}/{total} files", "progress": pct})
+                except Exception:
+                    pass
+        except Exception:
+            # Fallback: run whole-scan if batch scanning failed
+            report = run_static_source_scan(files, stack_info)
 
         # ── Step 4: LLM enrichment ──────────────────────────────────────
         try:
@@ -137,6 +170,11 @@ class SecurityAgent:
                 enrich_with_llm(report, files, stack_info),
                 timeout=20,
             )
+            try:
+                from app.routes.upload import _append_progress
+                _append_progress(self.project_id, {"agent": "SecurityAgent", "phase": "scanning", "message": "LLM enrichment completed", "progress": 92})
+            except Exception:
+                pass
         except Exception as error:
             add_log(self.project_id, "SecurityAgent", f"LLM enrichment skipped: {error}", "warn")
 

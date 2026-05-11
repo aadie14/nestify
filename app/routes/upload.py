@@ -19,7 +19,7 @@ from app.utils.repo_parser import parse_github, parse_natural_language, parse_te
 
 router = APIRouter()
 
-ALLOWED_PROVIDERS = {"auto", "netlify", "vercel", "railway"}
+ALLOWED_PROVIDERS = {"auto", "netlify", "vercel", "railway", "gcp"}
 
 # In-memory progress storage for WebSocket streaming
 pipeline_progress: dict[int, list[dict]] = {}
@@ -113,19 +113,23 @@ async def upload(
     provider: Optional[str] = Form("auto"),
     require_fix_approval: Optional[bool] = Form(False),
     agentic: Optional[bool] = Form(True),
+    auto_start: Optional[bool] = Form(True),
+    analysis_only: Optional[bool] = Form(False),
 ):
     """Upload a project and start the autonomous DevSecOps pipeline."""
     provider = (provider or "auto").strip().lower()
     if provider not in ALLOWED_PROVIDERS:
         raise HTTPException(status_code=400, detail="Unsupported deployment provider selected.")
-    preferred_provider = None if provider == "auto" else provider
+    # Enforce autonomous provider selection. We keep accepting `provider` for
+    # backward-compatible requests, but do not persist a preferred provider.
+    preferred_provider = None
 
     parsed_input, input_type, project_name, raw_file_bytes, raw_original_name = await _parse_input(
         file, github_url, text, filename, description
     )
     parsed_input["require_fix_approval"] = bool(require_fix_approval)
     parsed_input["agentic_enabled"] = True
-    parsed_input["analysis_only"] = True
+    parsed_input["analysis_only"] = bool(analysis_only)
     cleanup_pipeline_progress()
 
     project_id = create_project(
@@ -153,19 +157,29 @@ async def upload(
 
     pipeline_progress[project_id] = []
 
-    async def run_in_background() -> None:
-        orchestrator = AgentOrchestrator(
-            project_id,
-            progress_callback=lambda payload: _append_progress(project_id, payload),
-        )
-        try:
-            await orchestrator.run(parsed_input)
-        except Exception as error:
-            add_log(project_id, "Orchestrator", f"Pipeline failed: {error}", "error")
-            update_project(project_id, {"status": "failed"})
-            _append_progress(project_id, {"agent": "Orchestrator", "phase": "error", "message": str(error)})
+    if bool(auto_start):
+        async def run_in_background() -> None:
+            orchestrator = AgentOrchestrator(
+                project_id,
+                progress_callback=lambda payload: _append_progress(project_id, payload),
+            )
+            try:
+                await orchestrator.run(parsed_input)
+            except Exception as error:
+                add_log(project_id, "Orchestrator", f"Pipeline failed: {error}", "error")
+                update_project(project_id, {"status": "failed"})
+                _append_progress(project_id, {"agent": "Orchestrator", "phase": "error", "message": str(error)})
 
-    asyncio.create_task(run_in_background())
+        asyncio.create_task(run_in_background())
+    else:
+        _append_progress(
+            project_id,
+            {
+                "agent": "Orchestrator",
+                "phase": "ready",
+                "message": "Project staged. Click Run Autonomous Deploy to start analysis and deployment.",
+            },
+        )
 
     return JSONResponse({
         "project_id": project_id,
@@ -175,5 +189,13 @@ async def upload(
         "require_fix_approval": bool(require_fix_approval),
         "agentic": True,
         "file_count": len(parsed_input.get("files", [])),
-        "message": f"Pipeline started. Poll /api/status/{project_id} for progress.",
+        "message": (
+            (
+                f"Analysis started. Poll /api/status/{project_id} for progress."
+                if bool(analysis_only)
+                else f"Pipeline started. Poll /api/status/{project_id} for progress."
+            )
+            if bool(auto_start)
+            else f"Project staged. Trigger autonomous deploy to start processing for project {project_id}."
+        ),
     })

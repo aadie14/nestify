@@ -14,7 +14,7 @@ from app.services.project_source_service import load_source_text_map
 
 router = APIRouter()
 
-_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway"}
+_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp", "fly"}
 
 
 @router.post("/{project_id}")
@@ -68,11 +68,7 @@ async def deploy(project_id: int, force: bool = False):
             project_name=project["name"],
             files=files,
             stack_info=stack_info,
-            preferred_provider=(
-                str(project.get("preferred_provider") or "").strip().lower()
-                if str(project.get("preferred_provider") or "").strip().lower() in _SUPPORTED_DEPLOY_PROVIDERS
-                else None
-            ),
+            preferred_provider=None,
             github_url=source_payload.get("github_url"),
             env_template=project.get("env_template", "") or "",
         )

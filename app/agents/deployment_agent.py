@@ -31,22 +31,10 @@ from app.services.project_source_service import (
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway"}
+_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp", "fly"}
 
 
 # ─── V2 Routing Rules ────────────────────────────────────────────────────
-
-_V2_ROUTING: dict[str, str] = {
-    "static": "vercel",
-    "ssg": "vercel",
-    "spa": "vercel",
-    "backend": "railway",
-    "api": "railway",
-    "fullstack": "railway",
-    "docker": "railway",
-    "dockerized": "railway",
-}
-
 
 @dataclass(slots=True)
 class DeploymentResult:
@@ -119,16 +107,14 @@ class DeploymentAgent:
         app_kind: str,
         preferred_provider: str | None = None,
     ) -> str:
-        """Select deployment provider using V2 deterministic routing.
+        """Select deployment provider using credential-aware routing.
 
-        Respects user preference if set, otherwise uses the routing table.
+        Respects user preference if set, otherwise defers to the shared
+        deployment service provider selector so the agent can choose the
+        strongest available target.
         """
-        if preferred_provider:
-            normalized = preferred_provider.strip().lower()
-            if normalized in _SUPPORTED_DEPLOY_PROVIDERS:
-                return normalized
-
-        return _V2_ROUTING.get(app_kind, "railway")
+        # Ignore stored/caller preference to keep provider selection fully autonomous.
+        return choose_provider(app_kind, None)
 
     async def deploy(
         self,

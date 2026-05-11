@@ -1,42 +1,125 @@
 import React from 'react';
 import axios from 'axios';
+import { Download, ShieldCheck, Wrench, Rocket, Activity } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
 import StateMessage from '../components/ui/StateMessage';
-import AgentFeedCards, { FeedItem } from '../components/AgentFeedCards';
+
+type FeedItem = {
+  agent?: string;
+  message?: string;
+  severity?: string;
+  title?: string;
+  status?: string;
+};
+
+type SecurityIssue = {
+  severity?: string;
+  title?: string;
+  message?: string;
+  action?: string;
+};
+
+type FixItem = {
+  fix_type?: string;
+  file?: string;
+  status?: string;
+};
 
 type AutonomousResponse = {
   feed?: FeedItem[];
   audit?: {
     summary?: string;
-    security_issues?: Array<{
-      severity?: string;
-      title?: string;
-      message?: string;
-      action?: string;
-    }>;
-    fixes?: Array<{ fix_type?: string; file?: string; status?: string; note?: string }>;
+    security_issues?: SecurityIssue[];
+    fixes?: FixItem[];
     deployment_plan?: { platform?: string; reason?: string; confidence?: number };
-    cost_estimate?: { provider?: string; monthly_cost_usd?: number; config?: { memory_mb?: number; cpu?: number } };
-    confidence_score?: number;
   };
 };
 
-type ReportResponse = {
-  code_profile?: {
-    graph_nodes?: number;
-    graph_edges?: number;
-    files_scanned?: number;
+type StatusProgressItem = {
+  agent?: string;
+  phase?: string;
+  message?: string;
+  feed?: {
+    agent?: string;
+    title?: string;
+    message?: string;
+    severity?: string;
+  };
+  agent_event?: {
+    agent?: string;
+    event?: string;
+    details?: string;
   };
 };
 
-function severityBadge(value: string) {
-  const s = String(value || '').toLowerCase();
-  if (s === 'high' || s === 'critical') return 'error';
-  if (s === 'medium') return 'warning';
-  return 'intelligence';
+type StatusResponse = {
+  project?: {
+    status?: string;
+    execution_state?: {
+      status?: string;
+      step?: string;
+    };
+  };
+  progress?: StatusProgressItem[];
+};
+
+type AnalysisStageKey = 'scan' | 'security' | 'learning' | 'planning';
+
+type AnalysisStage = {
+  key: AnalysisStageKey;
+  label: string;
+};
+
+const ANALYSIS_STAGES: AnalysisStage[] = [
+  { key: 'scan', label: 'Scanning' },
+  { key: 'security', label: 'Security Analysis' },
+  { key: 'learning', label: 'Learning Match' },
+  { key: 'planning', label: 'Planning' },
+];
+
+function shortAgentName(value: string | undefined): string {
+  const agent = String(value || 'system').trim();
+  if (!agent) return 'system';
+  return agent.length > 24 ? `${agent.slice(0, 24)}...` : agent;
+}
+
+function normalizeAgentLabel(value: string): string {
+  const v = String(value || '').toLowerCase();
+  if (v.includes('security')) return 'Security';
+  if (v.includes('deploy') || v.includes('platform')) return 'Planner';
+  if (v.includes('code') || v.includes('fix') || v.includes('simulation')) return 'Code';
+  if (v.includes('cost') || v.includes('learning') || v.includes('debate')) return 'Learning';
+  return 'System';
+}
+
+function oneLine(text: string, max = 110): string {
+  const compact = String(text || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max - 3)}...`;
+}
+
+function stageIndexFromExecution(step: string): number {
+  const s = String(step || '').toLowerCase();
+  if (s === 'input' || s === 'code_analysis' || s === 'execution_test') return 0;
+  if (s === 'security_audit' || s === 'auto_fixes') return 1;
+  if (s === 'agent_debate' || s === 'cost_analysis') return 2;
+  if (s === 'deployment' || s === 'verification' || s === 'retry_loop' || s === 'monitoring' || s === 'completed') return 3;
+  return 0;
+}
+
+function stageState(index: number, active: number, executionStatus: string): 'done' | 'running' | 'pending' {
+  const doneStatus = ['live', 'completed', 'success'];
+  const failedStatus = ['failed', 'error'];
+  if (doneStatus.includes(executionStatus)) return 'done';
+  if (failedStatus.includes(executionStatus)) {
+    if (index < active) return 'done';
+    if (index === active) return 'running';
+    return 'pending';
+  }
+  if (index < active) return 'done';
+  if (index === active) return 'running';
+  return 'pending';
 }
 
 export default function AnalysisPage() {
@@ -44,8 +127,8 @@ export default function AnalysisPage() {
   const navigate = useNavigate();
   const projectId = Number(params.projectId || 0);
 
-  const [data, setData] = React.useState<AutonomousResponse | null>(null);
-  const [report, setReport] = React.useState<ReportResponse | null>(null);
+  const [payload, setPayload] = React.useState<AutonomousResponse | null>(null);
+  const [statusPayload, setStatusPayload] = React.useState<StatusResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -56,148 +139,184 @@ export default function AnalysisPage() {
     const load = async (initial = false) => {
       try {
         if (initial) setLoading(true);
-        const [autonomous, rep] = await Promise.all([
+        const [analysisRes, statusRes] = await Promise.all([
           axios.get(`/api/v1/projects/${projectId}/autonomous-response`),
-          axios.get(`/api/v1/projects/${projectId}/report`),
+          axios.get(`/api/status/${projectId}`),
         ]);
         if (!alive) return;
-        setData(autonomous.data || null);
-        setReport(rep.data || null);
+        setPayload(analysisRes.data || null);
+        setStatusPayload(statusRes.data || null);
         setError(null);
       } catch {
         if (!alive) return;
-        setError('Could not load analysis workspace. Verify backend and retry.');
+        setError('Could not load analysis data.');
       } finally {
         if (alive && initial) setLoading(false);
       }
     };
 
     load(true);
-    const timer = window.setInterval(() => load(false), 2500);
+    const timer = window.setInterval(() => load(false), 2200);
     return () => {
       alive = false;
       window.clearInterval(timer);
     };
   }, [projectId]);
 
-  if (!projectId) {
-    return <StateMessage variant="empty" title="No project selected" detail="Open Input and create a project first." />;
-  }
+  if (!projectId) return <StateMessage variant="empty" title="No project" detail="Start from Input tab." />;
+  if (loading) return <StateMessage variant="loading" title="Loading analysis" detail="Building agent feed." />;
+  if (error) return <StateMessage variant="error" title="Analysis unavailable" detail={error} />;
 
-  if (loading) {
-    return <StateMessage variant="loading" title="Loading analysis" detail="Preparing agent feed and audit panels." />;
-  }
+  const executionStep = String(statusPayload?.project?.execution_state?.step || '').toLowerCase();
+  const executionStatus = String(statusPayload?.project?.execution_state?.status || statusPayload?.project?.status || '').toLowerCase();
+  const currentStageIndex = stageIndexFromExecution(executionStep);
+  const completedCount = ANALYSIS_STAGES.reduce((acc, _, idx) => {
+    return stageState(idx, currentStageIndex, executionStatus) === 'done' ? acc + 1 : acc;
+  }, 0);
+  const baseProgress = Math.round((completedCount / ANALYSIS_STAGES.length) * 100);
+  const progressMessages = (statusPayload?.progress || []) as any[];
+  const latestProgress = progressMessages.length > 0 ? progressMessages[progressMessages.length - 1] : null;
+  const latestProgressValue = typeof latestProgress?.progress === 'number' ? Math.max(0, Math.min(100, latestProgress.progress)) : 0;
+  const analysisProgress = Math.max(baseProgress, latestProgressValue || 0);
 
-  if (error) {
-    return <StateMessage variant="error" title="Analysis unavailable" detail={error} />;
-  }
+  const rawFeed = payload?.feed || [];
+  const statusFeed = (statusPayload?.progress || []).map((row) => {
+    return {
+      agent: String(row.agent_event?.agent || row.feed?.agent || row.agent || 'system'),
+      message: String(row.agent_event?.details || row.feed?.message || row.message || row.phase || 'update'),
+      severity: String(row.feed?.severity || ''),
+      title: String(row.agent_event?.event || row.feed?.title || row.phase || 'update'),
+      status: String(row.feed?.severity || '').toLowerCase(),
+    } as FeedItem;
+  });
 
-  const feed = data?.feed || [];
-  const audit = data?.audit || {};
-  const issues = audit.security_issues || [];
-  const fixes = audit.fixes || [];
-  const deploymentPlan = audit.deployment_plan || {};
-  const cost = audit.cost_estimate || {};
+  const seenFeed = new Set<string>();
+  const feed = [...statusFeed, ...rawFeed]
+    .filter((item) => {
+      const agent = String(item.agent || '').toLowerCase();
+      const text = `${item.title || ''} ${item.message || ''}`.toLowerCase();
+      if (!agent && !text.trim()) return false;
+      if (agent.includes('meta_agent')) return false;
+      if (text.includes('internal reasoning')) return false;
+      return true;
+    })
+    .filter((item) => {
+      const key = `${String(item.agent || '').toLowerCase()}|${oneLine(String(item.message || item.title || ''), 70).toLowerCase()}`;
+      if (seenFeed.has(key)) return false;
+      seenFeed.add(key);
+      return true;
+    })
+    .slice(-12)
+    .reverse();
+
+  const audit = payload?.audit || {};
+  const issues = (audit.security_issues || []).slice(0, 8);
+  const fixes = (audit.fixes || []).slice(0, 8);
+  const plan = audit.deployment_plan || {};
+
+  const canDeploy = ['security_audit', 'auto_fixes', 'deployment', 'verification', 'monitoring', 'completed', 'live'].includes(executionStep);
 
   return (
-    <div className="analysis-shell">
-      <section className="analysis-center">
-        <Card>
-          <div className="section-head">
-            <h2>Analysis Feed</h2>
-            <Button variant="primary" onClick={() => navigate(`/deployment/${projectId}`)}>Go To Deploy</Button>
-          </div>
-          <AgentFeedCards items={feed} maxItems={12} />
-        </Card>
-
-        <Card>
-          <div className="section-head">
-            <h3>Graph View</h3>
-            <Badge variant="intelligence">Optional</Badge>
-          </div>
-          <div className="grid-3">
-            <div className="metric-item">
-              <div className="metric-label">Files</div>
-              <div className="metric-value">{report?.code_profile?.files_scanned ?? '-'}</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-label">Nodes</div>
-              <div className="metric-value">{report?.code_profile?.graph_nodes ?? '-'}</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-label">Edges</div>
-              <div className="metric-value">{report?.code_profile?.graph_edges ?? '-'}</div>
-            </div>
-          </div>
-        </Card>
+    <div className="neo-page">
+      <section className="neo-hero compact">
+        <div className="neo-kicker">Tab 2 · Analysis</div>
+        <h1>Agent Intelligence View</h1>
       </section>
 
-      <aside className="analysis-right">
-        <Card>
-          <h3>Audit</h3>
-          <div className="tiny">{audit.summary || 'Structured audit ready.'}</div>
-        </Card>
+      <section className="neo-grid-analysis">
+        <div className="neo-panel glass">
+          <div className="neo-panel-head">
+            <h3>Analysis Progress</h3>
+            {canDeploy ? (
+              <Button variant="primary" onClick={() => navigate(`/deployment/${projectId}`)}>
+                Go To Deploy
+              </Button>
+            ) : null}
+          </div>
+          <div className="neo-progress-wrap" aria-label="Analysis completion progress">
+            <div className="neo-progress-head">
+              <span>Real-time stage progress</span>
+              <strong>{analysisProgress}%</strong>
+            </div>
+            <div className="neo-progress-track">
+              <div className="neo-progress-fill" style={{ width: `${analysisProgress}%` }} />
+            </div>
+          </div>
 
-        <Card>
-          <h3>Security Issues</h3>
-          <div className="stack-list">
-            {issues.length ? issues.slice(0, 8).map((issue, idx) => (
-              <div key={`${issue.title}-${idx}`} className="audit-row">
-                <Badge variant={severityBadge(issue.severity || 'info') as any}>{String(issue.severity || 'info').toUpperCase()}</Badge>
-                <div>
-                  <div className="audit-title">{issue.title || 'Issue'}</div>
-                  <div className="tiny">{issue.message || 'Detected issue'}</div>
+          <div className="neo-stage-grid" style={{ marginTop: 12, marginBottom: 12 }}>
+            {ANALYSIS_STAGES.map((stage, idx) => {
+              const state = stageState(idx, currentStageIndex, executionStatus);
+              return (
+                <div key={stage.key} className={`neo-stage-chip ${state}`}>
+                  <span>{state === 'done' ? '✔' : state === 'running' ? '⏳' : '•'}</span>
+                  <strong>{stage.label}</strong>
                 </div>
-              </div>
-            )) : <div className="tiny">No critical findings.</div>}
+              );
+            })}
           </div>
-        </Card>
 
-        <Card>
-          <h3>Suggested Fixes</h3>
-          <div className="stack-list">
-            {fixes.length ? fixes.slice(0, 8).map((fix, idx) => (
-              <div key={`${fix.file}-${idx}`} className="audit-row">
-                <Badge variant="intelligence">FIX</Badge>
-                <div>
-                  <div className="audit-title">{fix.fix_type || 'remediation'}</div>
-                  <div className="tiny">{fix.file || 'unknown file'}</div>
+          <div className="neo-panel-head" style={{ marginTop: 2 }}>
+            <h3>Clean Agent Feed</h3>
+            <span className="neo-cap">Max 1 line per event</span>
+          </div>
+          <div className="neo-feed-list">
+            {feed.length ? feed.map((item, idx) => (
+              <article key={`${idx}-${item.agent}-${item.message}`} className="neo-feed-card">
+                <div className="neo-feed-msg">
+                  [{normalizeAgentLabel(shortAgentName(item.agent))}] {oneLine(String(item.message || item.title || 'update'))}
                 </div>
-              </div>
-            )) : <div className="tiny">No fix entries yet.</div>}
+              </article>
+            )) : <div className="tiny">Waiting for feed events...</div>}
           </div>
-        </Card>
+        </div>
 
-        <Card>
-          <h3>Deployment Plan</h3>
-          <div className="stack-list">
-            <div className="audit-row">
-              <Badge variant="success">PLATFORM</Badge>
-              <div className="audit-title">{deploymentPlan.platform || 'pending'}</div>
-            </div>
-            <div className="tiny">{deploymentPlan.reason || 'Provider selected from profile, risk, and cost signals.'}</div>
+        <aside className="neo-panel glass neo-audit-panel">
+          <div className="neo-panel-head">
+            <h3>Audit Panel</h3>
+            <a className="neo-link-btn" href={`/api/v1/projects/${projectId}/report/pdf`} target="_blank" rel="noreferrer">
+              <Download size={14} /> Download Full Audit Report
+            </a>
           </div>
-        </Card>
 
-        <Card>
-          <h3>Cost Estimate</h3>
-          <div className="grid-2">
-            <div className="metric-item">
-              <div className="metric-label">Provider</div>
-              <div className="metric-value">{cost.provider || '-'}</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-label">Monthly</div>
-              <div className="metric-value">{typeof cost.monthly_cost_usd === 'number' ? `$${cost.monthly_cost_usd.toFixed(2)}` : '-'}</div>
+          <div className="neo-audit-section">
+            <div className="neo-audit-title"><ShieldCheck size={14} /> Security Issues</div>
+            <div className="neo-audit-list">
+              {issues.length ? issues.map((item, idx) => (
+                <div key={`${item.title}-${idx}`} className="neo-audit-item">
+                  <span className={`neo-status ${String(item.severity || 'info').toLowerCase()}`}>{String(item.severity || 'info')}</span>
+                  <div>{String(item.title || item.message || 'Security issue')}</div>
+                </div>
+              )) : <div className="tiny">No active issues</div>}
             </div>
           </div>
-        </Card>
 
-        <Card>
-          <h3>Confidence Score</h3>
-          <div className="metric-value">{typeof audit.confidence_score === 'number' ? `${Math.round(audit.confidence_score * 100)}%` : '-'}</div>
-        </Card>
-      </aside>
+          <div className="neo-audit-section">
+            <div className="neo-audit-title"><Wrench size={14} /> Fixes</div>
+            <div className="neo-audit-list">
+              {fixes.length ? fixes.map((item, idx) => (
+                <div key={`${item.fix_type}-${idx}`} className="neo-audit-item">
+                  <span className="neo-status ok">fix</span>
+                  <div>{`${item.fix_type || 'remediation'} · ${item.file || 'unknown file'}`}</div>
+                </div>
+              )) : <div className="tiny">No fixes logged</div>}
+            </div>
+          </div>
+
+          <div className="neo-audit-section">
+            <div className="neo-audit-title"><Rocket size={14} /> Deployment Plan</div>
+            <div className="neo-plan-mini">
+              <div><span>Platform</span><strong>{plan.platform || 'pending'}</strong></div>
+              <div><span>Confidence</span><strong>{typeof plan.confidence === 'number' ? `${Math.round(plan.confidence * 100)}%` : '-'}</strong></div>
+              <div><span>Reason</span><strong>{String(plan.reason || 'Autonomous provider selection').slice(0, 90)}</strong></div>
+            </div>
+          </div>
+
+          <div className="neo-audit-summary">
+            <Activity size={14} />
+            <span>{String(audit.summary || 'Analysis complete.').slice(0, 120)}</span>
+          </div>
+        </aside>
+      </section>
     </div>
   );
 }
