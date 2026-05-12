@@ -72,7 +72,7 @@ export default function UploadPage() {
         transition={{ duration: 0.35, ease: 'easeOut' }}
       >
         <div className="neo-kicker">Tab 1 · Input</div>
-        <h1>Launch Autonomous DevSecOps Flow</h1>
+        <h1>Deploy with security within minutes</h1>
       </motion.section>
 
       <section className="neo-panel glass">

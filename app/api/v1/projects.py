@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import asyncio
 import json
 import os
@@ -34,7 +33,7 @@ from app.services.project_source_service import ensure_preview_index, get_local_
 
 router = APIRouter()
 
-_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp", "local"}
+_SUPPORTED_DEPLOY_PROVIDERS = {"vercel", "netlify", "railway", "gcp", "fly", "local"}
 _ANALYSIS_READY_STATES = {"done", "complete", "completed", "success", "skipped"}
 
 
@@ -81,9 +80,20 @@ def _format_deploy_failure(detail: Any) -> tuple[str, str, dict[str, Any]]:
     return reason, next_action, payload
 
 
-def _provider_fallback_order(runtime: str, current: str | None) -> str:
+def _provider_fallback_order(runtime: str, current: str | None, attempt: int = 1) -> str:
+    """Return next provider to try. On attempt 3, prefer Fly.io. Otherwise, fallback in order."""
     active = str(current or "").strip().lower()
-    candidates = ["vercel", "netlify", "local"] if runtime == "node" else ["railway", "local"]
+    
+    # Attempt 3: Always try Fly.io if not already tried
+    if attempt == 3 and active != "fly":
+        return "fly"
+    
+    # Otherwise, use standard fallback sequence
+    if runtime == "node":
+        candidates = ["vercel", "netlify", "fly", "local"]
+    else:  # Python/backend
+        candidates = ["railway", "fly", "local"]
+    
     for candidate in candidates:
         if candidate != active:
             return candidate
@@ -123,10 +133,11 @@ async def get_deployment_readiness() -> dict[str, Any]:
     has_vercel = bool(os.getenv("VERCEL_TOKEN", "").strip())
     has_netlify = bool(os.getenv("NETLIFY_API_TOKEN", "").strip())
     has_railway = bool(os.getenv("RAILWAY_API_KEY", "").strip())
+    has_fly = bool(os.getenv("FLY_API_TOKEN", "").strip())
     has_github = bool(os.getenv("GITHUB_TOKEN", "").strip())
 
     static_ready = has_vercel or has_netlify
-    backend_ready = has_railway
+    backend_ready = has_railway or has_fly
     static_probability = 0.85 if static_ready else 0.12
     backend_probability = 0.88 if (backend_ready and has_github) else (0.55 if backend_ready else 0.08)
 
@@ -134,7 +145,7 @@ async def get_deployment_readiness() -> dict[str, Any]:
     if not static_ready:
         messages.append("Static apps will use local preview URLs unless VERCEL_TOKEN or NETLIFY_API_TOKEN is configured.")
     if not backend_ready:
-        messages.append("Backend apps need RAILWAY_API_KEY for public live URLs.")
+        messages.append("Backend apps need RAILWAY_API_KEY or FLY_API_TOKEN for public live URLs.")
     if not has_github:
         messages.append("Set GITHUB_TOKEN to improve GitHub import reliability and avoid API limits.")
 
@@ -150,6 +161,7 @@ async def get_deployment_readiness() -> dict[str, Any]:
             "vercel": has_vercel,
             "netlify": has_netlify,
             "railway": has_railway,
+            "fly": has_fly,
         },
         "messages": messages,
     }
@@ -626,10 +638,10 @@ async def autonomous_fix_and_deploy(project_id: int) -> DeployResponse:
     except HTTPException as exc:
         second_reason, _, _ = _format_deploy_failure(exc.detail)
 
-    # 6) Switch provider.
+    # 6) Switch provider (attempt 3).
     runtime = str(SecurityAgent(project_id)._detect_stack(files).get("runtime") or "").strip().lower()
     current_provider = _normalize_provider(project.get("preferred_provider"))
-    switched_provider = _provider_fallback_order(runtime=runtime, current=current_provider)
+    switched_provider = _provider_fallback_order(runtime=runtime, current=current_provider, attempt=3)
     update_project(project_id, {"preferred_provider": switched_provider})
     _append_progress(
         project_id,
@@ -908,6 +920,36 @@ async def get_autonomous_response(project_id: int) -> dict[str, Any]:
     effective_provider = str(deployment.get("provider") or "").strip().lower() or None
     if url_provider:
         effective_provider = url_provider
+
+    insights = _parse_json(project.get("agentic_insights")) or {}
+    deploy_intel = insights.get("deployment_intelligence") if isinstance(insights.get("deployment_intelligence"), dict) else {}
+    selected_platform = str(
+        deploy_intel.get("chosen_platform")
+        or project.get("preferred_provider")
+        or deployment.get("provider")
+        or "unknown"
+    ).lower()
+    strategy_reason = str(
+        deploy_intel.get("reasoning")
+        or deploy_intel.get("rationale")
+        or (deployment.get("details") or {}).get("note")
+        or "Deployment outcome derived from the most recent provider selection."
+    )
+
+    provider_alignment = "aligned"
+    if selected_platform and effective_provider and selected_platform != effective_provider:
+        provider_alignment = "rerouted"
+
+    deployment_outcome = {
+        "selected_platform": selected_platform,
+        "actual_provider": effective_provider or "unknown",
+        "deployment_url": final_url,
+        "url_provider": url_provider or effective_provider or "unknown",
+        "provider_alignment": provider_alignment,
+        "provider_match": bool(selected_platform and effective_provider and selected_platform == effective_provider),
+        "reason": strategy_reason,
+        "confidence": float(deploy_intel.get("confidence") or 0.0),
+    }
 
     deployment_status = "success" if final_url else "failed"
     deployment_contract = {
@@ -1260,6 +1302,19 @@ def _build_audit_report_payload(project_id: int, project: dict[str, Any]) -> dic
         or deployment_details.get("note")
         or "Platform selected using deployment fit, security context, and cost model."
     )
+    actual_provider = str(latest_deployment.get("provider") or chosen_platform or project.get("preferred_provider") or "unknown").strip().lower()
+    if deployment_details.get("mode") == "local_preview_fallback":
+        actual_provider = "local"
+    deployment_outcome = {
+        "selected_platform": chosen_platform,
+        "actual_provider": actual_provider,
+        "deployment_url": latest_deployment.get("deployment_url") or project.get("public_url"),
+        "url_provider": actual_provider,
+        "provider_alignment": "aligned" if chosen_platform == actual_provider else "rerouted",
+        "provider_match": bool(chosen_platform == actual_provider),
+        "reason": strategy_reason,
+        "confidence": float(deploy_intel.get("confidence") or 0.0),
+    }
 
     return {
         "metadata": {
@@ -1306,6 +1361,7 @@ def _build_audit_report_payload(project_id: int, project: dict[str, Any]) -> dic
             "confidence": float(deploy_intel.get("confidence") or 0.0),
             "estimated_cost": est_cost,
         },
+        "deployment_outcome": deployment_outcome,
         "security_score": security_score,
         "findings": findings,
         "deployment_plan": {

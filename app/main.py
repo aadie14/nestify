@@ -40,14 +40,14 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     init_db()
     print("""
-  ╔═══════════════════════════════════════════════════════╗
-  ║  🪺  NESTIFY V2 — AI DevSecOps Intelligence Platform ║
-  ║  📡  http://localhost:8000                            ║
-  ║  🔌  WebSocket: ws://localhost:8000/ws                ║
-  ║  📊  Graph API: /api/v1/graph                         ║
-  ║  🛡️  Risk API:  /api/v1/risk                          ║
-  ║  🐙  Webhook:   /api/v1/webhook/github                ║
-  ╚═══════════════════════════════════════════════════════╝
+  +-------------------------------------------------------+
+  |  NESTIFY V2 - AI DevSecOps Intelligence Platform      |
+  |  http://localhost:8000                                 |
+  |  WebSocket: ws://localhost:8000/ws                     |
+  |  Graph API: /api/v1/graph                              |
+  |  Risk API:  /api/v1/risk                               |
+  |  Webhook:   /api/v1/webhook/github                     |
+  +-------------------------------------------------------+
     """)
     try:
         yield

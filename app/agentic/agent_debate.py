@@ -8,7 +8,7 @@ from typing import Any
 
 from app.agentic.llm_router import call_agentic_llm
 
-_SUPPORTED_DEPLOYMENT_PLATFORMS = {"railway", "vercel", "netlify", "gcp"}
+_SUPPORTED_DEPLOYMENT_PLATFORMS = {"railway", "vercel", "netlify", "gcp", "fly"}
 
 
 def _normalize_platform(platform: str | None, fallback: str = "railway") -> str:

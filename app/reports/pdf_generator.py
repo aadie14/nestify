@@ -15,6 +15,57 @@ class SecurityReportGenerator:
     def __init__(self) -> None:
         self._styles = None
 
+    @staticmethod
+    def _infer_provider_from_url(url: Any) -> str:
+        text = str(url or "").lower()
+        if "netlify.app" in text:
+            return "netlify"
+        if "vercel.app" in text:
+            return "vercel"
+        if "railway.app" in text or "up.railway.app" in text:
+            return "railway"
+        if "localhost" in text or "127.0.0.1" in text:
+            return "local"
+        return "unknown"
+
+    @staticmethod
+    def _safe_text(value: Any, default: str = "n/a") -> str:
+        text = str(value).strip() if value is not None else ""
+        return text or default
+
+    def _deployment_context(self, project: dict[str, Any], report: dict[str, Any]) -> dict[str, str]:
+        strategy = report.get("deployment_strategy") if isinstance(report.get("deployment_strategy"), dict) else {}
+        plan = report.get("deployment_plan") if isinstance(report.get("deployment_plan"), dict) else {}
+        outcome = report.get("deployment_outcome") if isinstance(report.get("deployment_outcome"), dict) else {}
+        final_url = outcome.get("deployment_url") or project.get("public_url") or ""
+        selected_platform = strategy.get("selected_platform") or plan.get("chosen_platform") or "unknown"
+        actual_provider = outcome.get("actual_provider") or self._infer_provider_from_url(final_url) or strategy.get("selected_platform") or "unknown"
+        url_provider = outcome.get("url_provider") or self._infer_provider_from_url(final_url) or "unknown"
+        provider_alignment = outcome.get("provider_alignment") or ("aligned" if selected_platform == actual_provider else "rerouted")
+        provider_match = bool(outcome.get("provider_match", selected_platform == actual_provider))
+        reason = outcome.get("reason") or plan.get("reasoning") or strategy.get("why_chosen") or "Platform selected using deployment fit, security posture, and cost model."
+
+        return {
+            "selected_platform": str(selected_platform),
+            "actual_provider": str(actual_provider),
+            "deployment_url": str(final_url),
+            "url_provider": str(url_provider),
+            "provider_alignment": str(provider_alignment),
+            "provider_match": "Yes" if provider_match else "No",
+            "reason": str(reason),
+        }
+
+    @staticmethod
+    def _format_step_text(step: dict[str, Any]) -> tuple[str, str, str]:
+        action = str(step.get("action") or step.get("recommendation") or "Review and remediate.").strip()
+        location = str(step.get("location") or "unknown location").strip()
+        severity = str(step.get("severity") or "info").strip().lower()
+        why = step.get("why_it_matters") or step.get("impact") or "This change reduces attack surface and improves deployment reliability."
+        how = (
+            f"Edit {location}, implement the remediation, and re-run security validation and deployment checks."
+        )
+        return action, str(why), how
+
     def generate_report(
         self,
         project_id: int,
@@ -56,21 +107,40 @@ class SecurityReportGenerator:
             return self._build_pdf(project, report)
         except Exception:
             # Graceful fallback if reportlab is unavailable: emit a valid minimal PDF.
+            deployment_context = self._deployment_context(project, report)
             lines: list[str] = []
             lines.append("Nestify Security Report")
+            lines.append("Detailed Security and Deployment Review")
             lines.append(f"Project: {project.get('name', 'Unknown')}")
             lines.append(f"Generated: {datetime.utcnow().isoformat()}Z")
+            lines.append("")
+            lines.append(f"Selected platform: {deployment_context['selected_platform']}")
+            lines.append(f"Actual provider: {deployment_context['actual_provider']}")
+            lines.append(f"Live URL: {deployment_context['deployment_url']}")
+            lines.append(f"Provider alignment: {deployment_context['provider_alignment']}")
             lines.append("")
             findings = report.get("findings") or {}
             for severity in ("critical", "high", "medium", "info", "low"):
                 items = findings.get(severity) if isinstance(findings, dict) else []
                 if items:
                     lines.append(f"{severity.upper()}: {len(items)}")
+            fix_recommendations = report.get("fix_recommendations") or {}
+            exact_steps = fix_recommendations.get("exact_fix_steps") if isinstance(fix_recommendations, dict) and isinstance(fix_recommendations.get("exact_fix_steps"), list) else []
+            if exact_steps:
+                lines.append("")
+                lines.append("Fix Playbook")
+                for step in exact_steps[:12]:
+                    action, why, how = self._format_step_text(step)
+                    lines.append(f"- What: {action}")
+                    lines.append(f"  Why: {why}")
+                    lines.append(f"  How: {how}")
             lines.append("")
             lines.append("Deployment Intelligence")
             plan = report.get("deployment_plan") or {}
             lines.append(f"Chosen platform: {plan.get('chosen_platform', 'unknown')}")
             lines.append(f"Confidence: {int(float(plan.get('confidence') or 0.0) * 100)}%")
+            if plan.get("reasoning"):
+                lines.append(f"Reasoning: {plan.get('reasoning')}")
             return self._build_minimal_pdf(lines)
 
     @staticmethod
@@ -91,10 +161,10 @@ class SecurityReportGenerator:
             page_lines = ["Nestify Security Report"]
 
         y = 800
-        content_parts = ["BT", "/F1 11 Tf"]
+        content_parts = ["BT", "/F1 11 Tf", f"72 {y} Td"]
         for line in page_lines[:52]:
-            content_parts.append(f"72 {y} Td ({_escape(line)}) Tj")
-            y -= 14
+            content_parts.append(f"({_escape(line)}) Tj")
+            content_parts.append("0 -14 Td")
         content_parts.append("ET")
         stream_body = "\n".join(content_parts).encode("ascii")
 
@@ -149,9 +219,12 @@ class SecurityReportGenerator:
             TableStyle,
             Image,
         )  # type: ignore[import-not-found]
-        # Graphics for charts
-        from reportlab.graphics.shapes import Drawing  # type: ignore[import-not-found]
-        from reportlab.graphics.charts.pie import Pie  # type: ignore[import-not-found]
+        try:
+            from reportlab.graphics.shapes import Drawing  # type: ignore[import-not-found]
+            from reportlab.graphics.charts.pie import Pie  # type: ignore[import-not-found]
+        except Exception:
+            Drawing = None  # type: ignore[assignment]
+            Pie = None  # type: ignore[assignment]
 
         styles = getSampleStyleSheet()
         styles.add(
@@ -193,6 +266,7 @@ class SecurityReportGenerator:
             rightMargin=50,
             topMargin=60,
             bottomMargin=50,
+            pageCompression=0,
         )
 
         findings_grouped = report.get("findings") or {}
@@ -216,6 +290,7 @@ class SecurityReportGenerator:
         chosen_platform = plan.get("chosen_platform") or "unknown"
         confidence = int(float(plan.get("confidence") or 0.0) * 100)
         estimated_cost = plan.get("estimated_cost")
+        deployment_context = self._deployment_context(project, report)
 
         story: list[Any] = []
 
@@ -228,25 +303,26 @@ class SecurityReportGenerator:
         story.append(Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC", styles["Body"]))
         story.append(Spacer(1, 0.4 * inch))
 
-        # Add a quick visual (pie chart) for severity distribution on cover
-        drawing = Drawing(260, 140)
-        pie = Pie()
-        pie.x = 70
-        pie.y = 10
-        pie.width = 120
-        pie.height = 120
-        data_vals = [max(0, critical), max(0, high), max(0, medium), max(0, low), max(0, info)]
-        pie.data = data_vals
-        pie.labels = ["Critical", "High", "Medium", "Low", "Info"]
-        pie.slices.strokeWidth = 0.5
-        pie.slices[0].fillColor = colors.HexColor("#DC2626")
-        pie.slices[1].fillColor = colors.HexColor("#EA580C")
-        pie.slices[2].fillColor = colors.HexColor("#CA8A04")
-        pie.slices[3].fillColor = colors.HexColor("#2563EB")
-        pie.slices[4].fillColor = colors.HexColor("#6B7280")
-        drawing.add(pie)
-        story.append(drawing)
-        story.append(Spacer(1, 0.25 * inch))
+        # Add a quick visual if chart primitives are available in the installed ReportLab build.
+        if Drawing is not None and Pie is not None:
+            drawing = Drawing(260, 140)
+            pie = Pie()
+            pie.x = 70
+            pie.y = 10
+            pie.width = 120
+            pie.height = 120
+            data_vals = [max(0, critical), max(0, high), max(0, medium), max(0, low), max(0, info)]
+            pie.data = data_vals
+            pie.labels = ["Critical", "High", "Medium", "Low", "Info"]
+            pie.slices.strokeWidth = 0.5
+            pie.slices[0].fillColor = colors.HexColor("#DC2626")
+            pie.slices[1].fillColor = colors.HexColor("#EA580C")
+            pie.slices[2].fillColor = colors.HexColor("#CA8A04")
+            pie.slices[3].fillColor = colors.HexColor("#2563EB")
+            pie.slices[4].fillColor = colors.HexColor("#6B7280")
+            drawing.add(pie)
+            story.append(drawing)
+            story.append(Spacer(1, 0.25 * inch))
 
         # Quick summary table under cover
 
@@ -281,6 +357,56 @@ class SecurityReportGenerator:
                     f"Nestify identified <b>{total}</b> findings with severity distribution: "
                     f"critical={critical}, high={high}, medium={medium}, low={low}, info={info}. "
                     "Agentic deployment planning evaluated cost, security, and technical fit before platform selection."
+                ),
+                styles["Body"],
+            )
+        )
+
+        decision_table = Table(
+            [
+                ["Selected platform", deployment_context["selected_platform"], "Actual provider", deployment_context["actual_provider"]],
+                ["Live URL", deployment_context["deployment_url"] or "not available", "URL provider", deployment_context["url_provider"]],
+                ["Provider alignment", deployment_context["provider_alignment"], "Provider match", deployment_context["provider_match"]],
+            ],
+            colWidths=[105, 165, 105, 165],
+        )
+        decision_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E0F2FE")),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        story.append(Spacer(1, 0.16 * inch))
+        story.append(Paragraph("Deployment Decision", styles["Section"]))
+        story.append(decision_table)
+        if deployment_context["selected_platform"] != deployment_context["actual_provider"]:
+            story.append(Spacer(1, 0.1 * inch))
+            story.append(
+                Paragraph(
+                    (
+                        "Selected platform and live provider differ because the final deployment was routed "
+                        "through a provider fallback or a URL-normalized target. The live URL always reflects "
+                        "the actual provider that owns the deployment endpoint."
+                    ),
+                    styles["Body"],
+                )
+            )
+        if deployment_context["reason"]:
+            story.append(Paragraph(f"Decision rationale: {deployment_context['reason']}", styles["Body"]))
+
+        story.append(Spacer(1, 0.12 * inch))
+        story.append(Paragraph("Raw Report Summary", styles["Section"]))
+        story.append(
+            Paragraph(
+                (
+                    "This report includes detailed security findings, exact remediation actions, why each change is required, "
+                    "how to implement it, deployment alignment, and recovery guidance for reruns."
                 ),
                 styles["Body"],
             )
@@ -335,6 +461,9 @@ class SecurityReportGenerator:
                 why_it_matters = item.get("why_it_matters") or item.get("impact")
                 if why_it_matters:
                     story.append(Paragraph(f"Why it matters: {why_it_matters}", styles["Body"]))
+                story.append(Paragraph(f"What to change: Update {location} to remove the unsafe pattern or add the missing control.", styles["Body"]))
+                story.append(Paragraph(f"How to change it: {recommendation}", styles["Body"]))
+                story.append(Paragraph("Validation: rerun the security scan, then confirm the finding is gone before redeploying.", styles["Body"]))
                 story.append(Spacer(1, 0.08 * inch))
                 finding_index += 1
 
@@ -411,18 +540,23 @@ class SecurityReportGenerator:
                 story.append(PageBreak())
                 story.append(Paragraph("Fix Recommendations", styles["Section"]))
                 for step in exact_steps[:15]:
-                    story.append(Paragraph(f"Step {step.get('step')}: {step.get('action')}", styles["Body"]))
+                    action, why, how = self._format_step_text(step)
+                    story.append(Paragraph(f"Step {step.get('step')}: {action}", styles["Body"]))
                     story.append(Paragraph(f"Location: {step.get('location')}", styles["Body"]))
+                    story.append(Paragraph(f"Why: {why}", styles["Body"]))
+                    story.append(Paragraph(f"How: {how}", styles["Body"]))
                 if code_suggestions:
                     story.append(Spacer(1, 0.08 * inch))
                     story.append(Paragraph("Code-Level Suggestions", styles["Section"]))
                     for suggestion in code_suggestions[:10]:
                         story.append(Paragraph(f"- {suggestion.get('action')} ({suggestion.get('location')})", styles["Body"]))
+                        story.append(Paragraph(f"  Why: {suggestion.get('action', 'Apply the suggested code change to reduce risk.')}", styles["Body"]))
                 if config_changes:
                     story.append(Spacer(1, 0.08 * inch))
                     story.append(Paragraph("Configuration Changes", styles["Section"]))
                     for change in config_changes[:10]:
                         story.append(Paragraph(f"- {change.get('action')} ({change.get('location')})", styles["Body"]))
+                        story.append(Paragraph("  Why: This config update closes deployment or secret-management gaps and makes the fix reproducible.", styles["Body"]))
 
         applied_fixes = report.get("applied_fixes") if isinstance(report.get("applied_fixes"), list) else []
         if applied_fixes:
@@ -452,6 +586,7 @@ class SecurityReportGenerator:
             story.append(Paragraph("Deployment Strategy", styles["Section"]))
             story.append(Paragraph(f"Selected platform: <b>{strategy.get('selected_platform', 'unknown')}</b>", styles["Body"]))
             story.append(Paragraph(f"Why chosen: {strategy.get('why_chosen', 'Not provided')}", styles["Body"]))
+            story.append(Paragraph(f"Actual provider: <b>{deployment_context['actual_provider']}</b>", styles["Body"]))
 
         remediation_steps = report.get("remediation_steps") or []
         if remediation_steps:

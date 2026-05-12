@@ -1,0 +1,725 @@
+%PDF-1.4
+%“Œ‹ž ReportLab Generated PDF document (opensource)
+1 0 obj
+<<
+/F1 2 0 R /F2 3 0 R
+>>
+endobj
+2 0 obj
+<<
+/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+>>
+endobj
+3 0 obj
+<<
+/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+>>
+endobj
+4 0 obj
+<<
+/Contents 12 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 11 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+5 0 obj
+<<
+/Contents 13 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 11 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+6 0 obj
+<<
+/Contents 14 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 11 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+7 0 obj
+<<
+/Contents 15 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 11 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+8 0 obj
+<<
+/Contents 16 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 11 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 /Trans <<
+
+>> 
+  /Type /Page
+>>
+endobj
+9 0 obj
+<<
+/PageMode /UseNone /Pages 11 0 R /Type /Catalog
+>>
+endobj
+10 0 obj
+<<
+/Author (\(anonymous\)) /CreationDate (D:20260512204348+05'00') /Creator (\(unspecified\)) /Keywords () /ModDate (D:20260512204348+05'00') /Producer (ReportLab PDF Library - \(opensource\)) 
+  /Subject (\(unspecified\)) /Title (\(anonymous\)) /Trapped /False
+>>
+endobj
+11 0 obj
+<<
+/Count 5 /Kids [ 4 0 R 5 0 R 6 0 R 7 0 R 8 0 R ] /Type /Pages
+>>
+endobj
+12 0 obj
+<<
+/Length 4075
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+q
+BT /F1 9 Tf 10.8 TL ET
+.419608 .447059 .501961 rg
+BT 1 0 0 1 50 806.8898 Tm (Nestify \227 Security Analysis Report) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 516.7546 30 Tm (Page 1) Tj T* ET
+Q
+q
+1 0 0 1 56 675.0898 cm
+Q
+q
+1 0 0 1 56 653.0898 cm
+q
+.427451 .156863 .85098 rg
+BT 1 0 0 1 0 -2 Tm /F2 24 Tf 22 TL (SECURITY ANALYSIS REPORT) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 634.4498 cm
+Q
+q
+1 0 0 1 56 614.4498 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Project: ) Tj /F2 10 Tf (snippet.py) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 610.1298 cm
+Q
+q
+1 0 0 1 56 590.1298 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Generated: 2026-05-12 15:13:48 UTC) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 561.3298 cm
+Q
+q
+1 0 0 1 77.6378 489.3298 cm
+q
+.929412 .913725 .996078 rg
+n 0 72 440 -18 re f*
+0 0 0 rg
+BT /F1 10 Tf 12 TL ET
+BT 1 0 0 1 6 59 Tm (Total Findings) Tj T* ET
+BT 1 0 0 1 106 59 Tm (1) Tj T* ET
+BT 1 0 0 1 196 59 Tm (Chosen Platform) Tj T* ET
+BT 1 0 0 1 326 59 Tm (fly) Tj T* ET
+BT 1 0 0 1 6 41 Tm (Critical) Tj T* ET
+BT 1 0 0 1 106 41 Tm (0) Tj T* ET
+BT 1 0 0 1 196 41 Tm (Confidence) Tj T* ET
+BT 1 0 0 1 326 41 Tm (0%) Tj T* ET
+BT 1 0 0 1 6 23 Tm (High) Tj T* ET
+BT 1 0 0 1 106 23 Tm (0) Tj T* ET
+BT 1 0 0 1 196 23 Tm (Estimated Cost) Tj T* ET
+BT 1 0 0 1 326 23 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 5 Tm (Medium) Tj T* ET
+BT 1 0 0 1 106 5 Tm (0) Tj T* ET
+BT 1 0 0 1 196 5 Tm (Low) Tj T* ET
+BT 1 0 0 1 326 5 Tm (0) Tj T* ET
+q
+1 J
+1 j
+.819608 .835294 .858824 RG
+.5 w
+n 0 72 m 440 72 l S
+n 0 0 m 440 0 l S
+n 0 0 m 0 72 l S
+n 440 0 m 440 72 l S
+n 0 54 m 440 54 l S
+n 0 36 m 440 36 l S
+n 0 18 m 440 18 l S
+n 100 0 m 100 72 l S
+n 190 0 m 190 72 l S
+n 320 0 m 320 72 l S
+Q
+Q
+Q
+q
+1 0 0 1 56 474.9298 cm
+Q
+q
+1 0 0 1 56 444.9298 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Executive Summary) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 408.9298 cm
+q
+BT 1 0 0 1 0 18 Tm 14 TL /F1 10 Tf 0 0 0 rg (Nestify identified ) Tj /F2 10 Tf (1) Tj /F1 10 Tf ( findings with severity distribution: critical=0, high=0, medium=0, low=0, info=1. Agentic) Tj T* (deployment planning evaluated cost, security, and technical fit before platform selection.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 397.4098 cm
+Q
+q
+1 0 0 1 56 367.4098 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Deployment Decision) Tj T* ET
+Q
+Q
+q
+1 0 0 1 27.6378 305.4098 cm
+q
+.878431 .94902 .996078 rg
+n 0 54 540 -18 re f*
+0 0 0 rg
+BT /F1 9 Tf 12 TL ET
+BT 1 0 0 1 6 42 Tm (Selected platform) Tj T* ET
+BT 1 0 0 1 111 42 Tm (fly) Tj T* ET
+BT 1 0 0 1 276 42 Tm (Actual provider) Tj T* ET
+BT 1 0 0 1 381 42 Tm (fly) Tj T* ET
+BT 1 0 0 1 6 24 Tm (Live URL) Tj T* ET
+BT 1 0 0 1 111 24 Tm (not available) Tj T* ET
+BT 1 0 0 1 276 24 Tm (URL provider) Tj T* ET
+BT 1 0 0 1 381 24 Tm (fly) Tj T* ET
+BT 1 0 0 1 6 6 Tm (Provider alignment) Tj T* ET
+BT 1 0 0 1 111 6 Tm (aligned) Tj T* ET
+BT 1 0 0 1 276 6 Tm (Provider match) Tj T* ET
+BT 1 0 0 1 381 6 Tm (Yes) Tj T* ET
+q
+1 J
+1 j
+.819608 .835294 .858824 RG
+.5 w
+n 0 54 m 540 54 l S
+n 0 0 m 540 0 l S
+n 0 0 m 0 54 l S
+n 540 0 m 540 54 l S
+n 0 36 m 540 36 l S
+n 0 18 m 540 18 l S
+n 105 0 m 105 54 l S
+n 270 0 m 270 54 l S
+n 375 0 m 375 54 l S
+Q
+Q
+Q
+q
+1 0 0 1 56 285.4098 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Decision rationale: Platform selected using deployment fit, security context, and cost model.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 276.7698 cm
+Q
+q
+1 0 0 1 56 246.7698 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Raw Report Summary) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 210.7698 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 18 Tm /F1 10 Tf 14 TL (This report includes detailed security findings, exact remediation actions, why each change is required, how) Tj T* (to implement it, deployment alignment, and recovery guidance for reruns.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 199.9698 cm
+Q
+q
+1 0 0 1 56 169.9698 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Project Overview) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 147.9698 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Detected stack: framework=) Tj /F2 10 Tf (unknown) Tj /F1 10 Tf (, runtime=) Tj /F2 10 Tf (unknown) Tj T* ET
+Q
+Q
+ 
+endstream
+endobj
+13 0 obj
+<<
+/Length 1371
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+q
+BT /F1 9 Tf 10.8 TL ET
+.419608 .447059 .501961 rg
+BT 1 0 0 1 50 806.8898 Tm (Nestify \227 Security Analysis Report) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 516.7546 30 Tm (Page 2) Tj T* ET
+Q
+q
+1 0 0 1 56 757.8898 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Detailed Findings) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 735.8898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F2 10 Tf .294118 .333333 .388235 rg (INFO #1) Tj /F1 10 Tf 0 0 0 rg ( - The print statement may potentially leak sensitive information.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 715.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Location: snippet.py:1) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 695.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Recommendation: Use a secure logging mechanism instead of print statements.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 675.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (What to change: Update snippet.py to remove the unsafe pattern or add the missing control.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 655.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (How to change it: Use a secure logging mechanism instead of print statements.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 635.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Validation: rerun the security scan, then confirm the finding is gone before redeploying.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 630.1298 cm
+Q
+ 
+endstream
+endobj
+14 0 obj
+<<
+/Length 1327
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+q
+BT /F1 9 Tf 10.8 TL ET
+.419608 .447059 .501961 rg
+BT 1 0 0 1 50 806.8898 Tm (Nestify \227 Security Analysis Report) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 516.7546 30 Tm (Page 3) Tj T* ET
+Q
+q
+1 0 0 1 56 757.8898 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Deployment Intelligence) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 735.8898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Chosen Platform: ) Tj /F2 10 Tf (fly) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 715.8898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Confidence: ) Tj /F2 10 Tf (0%) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 695.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Reasoning: Platform selected using deployment fit, security context, and cost model.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 687.2498 cm
+Q
+q
+1 0 0 1 56 657.2498 cm
+q
+BT 1 0 0 1 0 3 Tm 18 TL /F2 15 Tf .066667 .094118 .152941 rg (Failure Analysis & Recovery) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 621.2498 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 18 Tm /F1 10 Tf 14 TL (Failure Reason: Backend deployment failed on fly: Fly GraphQL error: Field 'nodes' doesn't exist on type) Tj T* ('Allocation') Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 601.2498 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Nestify Recovery Plan: Verify provider credentials, workspace settings, and runtime configuration.) Tj T* ET
+Q
+Q
+ 
+endstream
+endobj
+15 0 obj
+<<
+/Length 3188
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+q
+BT /F1 9 Tf 10.8 TL ET
+.419608 .447059 .501961 rg
+BT 1 0 0 1 50 806.8898 Tm (Nestify \227 Security Analysis Report) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 516.7546 30 Tm (Page 4) Tj T* ET
+Q
+q
+1 0 0 1 56 757.8898 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Fix Recommendations) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 735.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Step 1: Use a secure logging mechanism instead of print statements.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 715.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Location: snippet.py:1) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 695.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Why: This change reduces attack surface and improves deployment reliability.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 675.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (How: Edit snippet.py:1, implement the remediation, and re-run security validation and deployment checks.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 670.1298 cm
+Q
+q
+1 0 0 1 56 640.1298 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Code-Level Suggestions) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 618.1298 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (- Use a secure logging mechanism instead of print statements. \(snippet.py:1\)) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 598.1298 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Why: Use a secure logging mechanism instead of print statements.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 592.3698 cm
+Q
+q
+1 0 0 1 56 562.3698 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Configuration Changes) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 526.3698 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 18 Tm /F1 10 Tf 14 TL (- Verify deployment env variables and provider credentials are configured for secure production rollout.) Tj T* (\(deployment configuration\)) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 506.3698 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Why: This config update closes deployment or secret-management gaps and makes the fix reproducible.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 497.7298 cm
+Q
+q
+1 0 0 1 56 467.7298 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Deployment Readiness) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 445.7298 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Score: ) Tj /F2 10 Tf (100) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 425.7298 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Safe to deploy: ) Tj /F2 10 Tf (No) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 405.7298 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Blocking issues:) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 385.7298 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (- Latest deployment run is blocked or failed) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 377.0898 cm
+Q
+q
+1 0 0 1 56 347.0898 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Deployment Strategy) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 325.0898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Selected platform: ) Tj /F2 10 Tf (fly) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 305.0898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Why chosen: Platform selected using deployment fit, security context, and cost model.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 285.0898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F1 10 Tf 0 0 0 rg (Actual provider: ) Tj /F2 10 Tf (fly) Tj T* ET
+Q
+Q
+ 
+endstream
+endobj
+16 0 obj
+<<
+/Length 2719
+>>
+stream
+1 0 0 1 0 0 cm  BT /F1 12 Tf 14.4 TL ET
+q
+BT /F1 9 Tf 10.8 TL ET
+.419608 .447059 .501961 rg
+BT 1 0 0 1 50 806.8898 Tm (Nestify \227 Security Analysis Report) Tj T* ET
+BT /F1 9 Tf 10.8 TL ET
+BT 1 0 0 1 516.7546 30 Tm (Page 5) Tj T* ET
+Q
+q
+1 0 0 1 56 757.8898 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Detailed Remediation Steps) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 735.8898 cm
+q
+BT 1 0 0 1 0 4 Tm 14 TL /F2 10 Tf 0 0 0 rg (Step 1 [INFO]) Tj /F1 10 Tf ( - info) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 715.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Location: snippet.py:1) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 695.8898 cm
+q
+0 0 0 rg
+BT 1 0 0 1 0 4 Tm /F1 10 Tf 14 TL (Action: Use a secure logging mechanism instead of print statements.) Tj T* ET
+Q
+Q
+q
+1 0 0 1 56 691.5698 cm
+Q
+q
+1 0 0 1 56 682.9298 cm
+Q
+q
+1 0 0 1 56 652.9298 cm
+q
+.066667 .094118 .152941 rg
+BT 1 0 0 1 0 3 Tm /F2 15 Tf 18 TL (Top Similar Deployments) Tj T* ET
+Q
+Q
+q
+1 0 0 1 97.6378 482.9298 cm
+q
+.866667 .839216 .996078 rg
+n 0 162 400 -18 re f*
+0 0 0 rg
+BT /F2 9 Tf 12 TL ET
+BT 1 0 0 1 6 150 Tm (Platform) Tj T* ET
+BT 1 0 0 1 116 150 Tm (Similarity) Tj T* ET
+BT 1 0 0 1 226 150 Tm (Success) Tj T* ET
+BT 1 0 0 1 316 150 Tm (Cost) Tj T* ET
+BT /F1 9 Tf 12 TL ET
+BT 1 0 0 1 6 132 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 132 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 132 Tm (no) Tj T* ET
+BT 1 0 0 1 316 132 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 114 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 114 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 114 Tm (no) Tj T* ET
+BT 1 0 0 1 316 114 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 96 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 96 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 96 Tm (no) Tj T* ET
+BT 1 0 0 1 316 96 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 78 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 78 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 78 Tm (no) Tj T* ET
+BT 1 0 0 1 316 78 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 60 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 60 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 60 Tm (no) Tj T* ET
+BT 1 0 0 1 316 60 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 42 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 42 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 42 Tm (no) Tj T* ET
+BT 1 0 0 1 316 42 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 24 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 24 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 24 Tm (no) Tj T* ET
+BT 1 0 0 1 316 24 Tm (n/a) Tj T* ET
+BT 1 0 0 1 6 6 Tm (fly) Tj T* ET
+BT 1 0 0 1 116 6 Tm (n/a) Tj T* ET
+BT 1 0 0 1 226 6 Tm (no) Tj T* ET
+BT 1 0 0 1 316 6 Tm (n/a) Tj T* ET
+q
+1 J
+1 j
+.819608 .835294 .858824 RG
+.5 w
+n 0 162 m 400 162 l S
+n 0 0 m 400 0 l S
+n 0 0 m 0 162 l S
+n 400 0 m 400 162 l S
+n 0 144 m 400 144 l S
+n 0 126 m 400 126 l S
+n 0 108 m 400 108 l S
+n 0 90 m 400 90 l S
+n 0 72 m 400 72 l S
+n 0 54 m 400 54 l S
+n 0 36 m 400 36 l S
+n 0 18 m 400 18 l S
+n 110 0 m 110 162 l S
+n 220 0 m 220 162 l S
+n 310 0 m 310 162 l S
+Q
+Q
+Q
+ 
+endstream
+endobj
+xref
+0 17
+0000000000 65535 f 
+0000000061 00000 n 
+0000000102 00000 n 
+0000000209 00000 n 
+0000000321 00000 n 
+0000000526 00000 n 
+0000000731 00000 n 
+0000000936 00000 n 
+0000001141 00000 n 
+0000001346 00000 n 
+0000001415 00000 n 
+0000001696 00000 n 
+0000001780 00000 n 
+0000005907 00000 n 
+0000007330 00000 n 
+0000008709 00000 n 
+0000011949 00000 n 
+trailer
+<<
+/ID 
+[<4ae35b25f2943265daad3797f9d0a1ec><4ae35b25f2943265daad3797f9d0a1ec>]
+% ReportLab generated PDF document -- digest (opensource)
+
+/Info 10 0 R
+/Root 9 0 R
+/Size 17
+>>
+startxref
+14720
+%%EOF

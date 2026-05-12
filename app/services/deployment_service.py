@@ -171,7 +171,7 @@ def _fly_personal_organization() -> dict[str, Any]:
 
 def _fly_find_or_create_app(app_name: str) -> dict[str, Any]:
     """Find a Fly app by name or create it if it doesn't exist."""
-    query = "query($name: String!) { app(name: $name) { id name appUrl allocations { nodes { ip type region } } } }"
+    query = "query($name: String!) { app(name: $name) { id name appUrl ipAddresses { nodes { address type region } } } }"
     data = _graphql_fly_request(query, {"name": app_name})
     app = data.get("app")
     if app and app.get("id"):
@@ -182,7 +182,7 @@ def _fly_find_or_create_app(app_name: str) -> dict[str, Any]:
         """
         mutation($input: CreateAppInput!) {
           createApp(input: $input) {
-            app { id name appUrl allocations { nodes { ip type region } } }
+            app { id name appUrl ipAddresses { nodes { address type region } } }
           }
         }
         """,
@@ -204,10 +204,10 @@ def _fly_find_or_create_app(app_name: str) -> dict[str, Any]:
 def _fly_allocate_ip(app_id: str, ip_type: str) -> dict[str, Any] | None:
     """Allocate a Fly public IP if the app does not already have one of this type."""
     app_data = _graphql_fly_request(
-        "query($id: ID!) { app(id: $id) { id allocations { nodes { ip type region } } } }",
+        "query($id: ID!) { app(id: $id) { id ipAddresses { nodes { address type region } } } }",
         {"id": app_id},
     ).get("app") or {}
-    current_ips = app_data.get("allocations") or {}
+    current_ips = app_data.get("ipAddresses") or {}
     nodes = current_ips.get("nodes") or []
     if any(str(node.get("type") or "").lower() == ip_type.lower() for node in nodes):
         return None

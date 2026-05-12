@@ -255,6 +255,24 @@ function suggestFix(reason: string): string {
   return 'Inspect the failed attempt logs, apply the suggested patch, and rerun deployment.';
 }
 
+function providerFromUrl(url: string | undefined): string {
+  const value = String(url || '').toLowerCase();
+  if (value.includes('netlify.app')) return 'netlify';
+  if (value.includes('vercel.app')) return 'vercel';
+  if (value.includes('railway.app') || value.includes('up.railway.app')) return 'railway';
+  if (value.includes('localhost') || value.includes('127.0.0.1')) return 'local';
+  return 'unknown';
+}
+
+function hostFromUrl(url: string | undefined): string {
+  try {
+    if (!url) return 'n/a';
+    return new URL(url).host;
+  } catch {
+    return 'n/a';
+  }
+}
+
 export default function DeploymentPage() {
   const params = useParams<{ projectId: string }>();
   const projectId = Number(params.projectId || 0);
@@ -336,11 +354,22 @@ export default function DeploymentPage() {
   const plan = statusPayload?.project?.agentic_insights?.planning_engine || {};
   const meta = statusPayload?.project?.agentic_insights?.meta_agent || {};
   const finalOutput = statusPayload?.final_output || {};
+  const selectedPlatform = String(plan.platform || deployment.provider || 'auto');
+  const liveProvider = String(
+    autoPayload?.deployment?.provider ||
+    statusPayload?.deployment?.provider ||
+    providerFromUrl(autoPayload?.deployment?.final_url || statusPayload?.deployment?.deployment_url || finalOutput.deployment?.url),
+  );
+  const liveUrl = autoPayload?.deployment?.final_url || statusPayload?.deployment?.deployment_url || finalOutput.deployment?.url;
+  const urlHost = hostFromUrl(liveUrl);
+  const providerMismatch = selectedPlatform !== 'auto' && liveProvider !== 'unknown' && selectedPlatform !== liveProvider;
 
   const deployment = {
     status: autoPayload?.deployment?.status || statusPayload?.deployment?.status || finalOutput.deployment?.status,
-    url: autoPayload?.deployment?.final_url || statusPayload?.deployment?.deployment_url || finalOutput.deployment?.url,
-    provider: autoPayload?.deployment?.provider || statusPayload?.deployment?.provider,
+    url: liveUrl,
+    provider: liveProvider,
+    selected_provider: selectedPlatform,
+    url_host: urlHost,
     attempts: autoPayload?.deployment?.attempts || finalOutput.deployment?.attempts,
     changes: finalOutput.deployment?.changes || [],
     failure_reason:
@@ -576,7 +605,9 @@ export default function DeploymentPage() {
             ))}
           </div>
           <div className="neo-plan-meta">
-            <span>Platform: <strong>{plan.platform || 'auto'}</strong></span>
+            <span>Selected platform: <strong>{selectedPlatform}</strong></span>
+            <span>Live provider: <strong>{deployment.provider}</strong></span>
+            <span>URL host: <strong>{deployment.url_host}</strong></span>
             <span>Confidence: <strong>{Math.round((confidence || 0) * 100)}%</strong></span>
             <span>State: <strong>{finalState}</strong></span>
           </div>
@@ -661,7 +692,7 @@ export default function DeploymentPage() {
               </strong>
             </div>
             <div className="neo-final-item">
-              <span>URL</span>
+              <span>Live URL</span>
               <strong>
                 {deployment.url ? (
                   <a href={deployment.url} target="_blank" rel="noreferrer" className="neo-link-inline">
@@ -670,6 +701,23 @@ export default function DeploymentPage() {
                 ) : 'not available'}
               </strong>
             </div>
+            <div className="neo-final-item">
+              <span>Selected platform</span>
+              <strong>{deployment.selected_provider || 'auto'}</strong>
+            </div>
+            <div className="neo-final-item">
+              <span>Actual provider</span>
+              <strong>{deployment.provider || 'unknown'}</strong>
+            </div>
+            {providerMismatch ? (
+              <div className="neo-final-item wide">
+                <span>Provider alignment</span>
+                <strong>
+                  Planned for {deployment.selected_provider}, but the live URL is hosted on {deployment.provider}.
+                  The URL always reflects the actual deployment endpoint.
+                </strong>
+              </div>
+            ) : null}
             <div className="neo-final-item">
               <span>Confidence</span>
               <strong>{Math.round((confidence || 0) * 100)}%</strong>
