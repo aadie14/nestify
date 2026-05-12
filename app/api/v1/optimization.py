@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 import httpx
 from pydantic import BaseModel, Field
 
-from app.agentic.agents.cost_optimization_agent import CostOptimizationSpecialist
+from app.agentic.agents.planning_agent import PlanningAgent as CostOptimizationSpecialist
 from app.database import add_log, get_project, update_project
 from app.services.project_source_service import load_source_text_map
 

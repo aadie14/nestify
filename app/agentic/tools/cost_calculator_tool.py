@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app.agentic.agents.cost_optimization_agent import CostOptimizationSpecialist
+from app.agentic.agents.planning_agent import PlanningAgent as CostOptimizationSpecialist
 
 
 class CostCalculatorTool:

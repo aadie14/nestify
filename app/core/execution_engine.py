@@ -14,8 +14,8 @@ from typing import Any, Callable
 import httpx
 
 from app.agentic.agent_debate import AgentDebate
-from app.agentic.agents.cost_optimization_agent import CostOptimizationSpecialist
-from app.agentic.agents.production_monitoring_agent import ProductionMonitoringAnalyst
+from app.agentic.agents.planning_agent import PlanningAgent as CostOptimizationSpecialist
+from app.agentic.agents.post_deploy_agent import PostDeployAgent as ProductionMonitoringAnalyst
 from app.agentic.agents.self_healing_agent import SelfHealingDeploymentEngineer
 from app.agentic.coordinator import AgenticCoordinator
 from app.agentic.models import AgenticInsights
